@@ -1,0 +1,16 @@
+# Example profile configuration ($DSH_HOME/profiles/<profile>/cordis.patch.yml).
+# Replace <placeholders> before first start; see docs/006-deployment.md. Absolute POSIX, Windows drive, and UNC paths are accepted.
+- id: webserver
+  config:
+    host: 127.0.0.1
+    port: 3082
+- id: dsh-superagent
+  config:
+    stateDir: <absolute path, for example /home/me/.dsh/state/superagent>
+    # Gatehouse review console (required for eval.mode=review):
+    # consoleUrl: http://127.0.0.1:8787
+    # consoleEventSecret: <shared secret for dsh-superagent -> Gatehouse events>
+    # consoleSharedSecret: <shared secret for Gatehouse -> dsh-superagent commands>
+# Feishu is optional: uncomment to enable its Source, then set the bot's lark-cli on the Feishu Source.
+# - id: dsh-superagent-feishu
+#   disabled: false

@@ -1,0 +1,15 @@
+# Attribution and Source Notice
+
+DSH Superagent Review is an independently maintained modified distribution of the open-source
+`dsh-superagent` project:
+
+- Upstream project: dsh-superagent
+- Upstream repository: https://github.com/deepseek-ai/dsh-superagent-prototype
+- Upstream license: MIT
+
+DSH Superagent Review is not an official DeepSeek product. Copyright and license notices from
+the upstream project and third-party dependencies remain in effect.
+
+The independent changes in this repository add review-mode proposals, approval
+grants, console-facing HMAC APIs, durable console event delivery, and
+console-approved execution entry points for integration with Gatehouse.
