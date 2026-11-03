@@ -36,6 +36,7 @@ execution.started / execution.finished / execution.failed
 - 人工批准前不会运行命令、修改文件、清理订阅或产生其他代码执行副作用。
 - 收到需求后先向发起人解释浅显原因并告知已记录、已移交开发；批准后再通知开发开始时间。
 - ApprovalGrant 绑定 `requirement_hash`、`scope_hash`、`scheduled_at` 和过期时间。
+- Gatehouse 在批准命令中下发 canonical `grant_id`；执行侧不得生成第二枚 Grant ID。
 - Grant 在执行前原子消费，重复请求使用同一 `execution_id`，不会重复创建 Worker。
 - DSH Superagent Review 不自行判断人工审批结果；Gatehouse 不直接操作 Git 或 PR。
 

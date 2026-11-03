@@ -58,6 +58,7 @@ describe('approval bridge', () => {
     const hash = `sha256:${'a'.repeat(64)}`
     const decision = ApprovalDecisionSchema.parse({
       proposal_id: 'proposal-1', decision: 'approve', reviewer: '演示复核人',
+      grant_id: 'grant-test-1',
       requirement_hash: hash, scope_hash: hash,
       schedule_at: '2026-11-02T08:05:00.000Z', expires_at: '2026-11-02T09:00:00.000Z',
       trace_id: 'trace-1', idempotency_key: 'decision-1',
@@ -86,10 +87,11 @@ describe('approval bridge', () => {
     const proposal = h.bridge.list()[0]!
     h.tick(60_000)
     const approved = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
-      comment: '范围明确', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      comment: '范围明确', grant_id: 'grant-gatehouse-1', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
       schedule_at: new Date(Date.parse('2026-11-02T08:05:00.000Z')).toISOString(),
       expires_at: new Date(Date.parse('2026-11-02T09:00:00.000Z')).toISOString(), trace_id: 'trace-1', idempotency_key: 'decision-1' })
     expect(approved.proposal.status).toBe('approved')
+    expect(approved.grant?.id).toBe('grant-gatehouse-1')
     expect(h.store.tickets.list()).toEqual([])
     const scheduleNotice = h.delivered.find(message => message.id === key('approval-schedule', proposal.id))
     expect(scheduleNotice).toMatchObject({ kind: 'reply', channel: h.trigger.channel })
@@ -119,7 +121,7 @@ describe('approval bridge', () => {
     const proposal = h.bridge.list()[0]!
     h.tick(60_000)
     const approved = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
-      comment: '', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      comment: '', grant_id: 'grant-gatehouse-1', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
       schedule_at: '2026-11-02T08:05:00.000Z', expires_at: '2026-11-02T09:00:00.000Z',
       trace_id: 'trace-1', idempotency_key: 'decision-1' })
 
@@ -161,7 +163,7 @@ describe('approval bridge', () => {
     const proposal = h.bridge.list()[0]!
     h.tick(60_000)
     const approved = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
-      comment: '', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      comment: '', grant_id: 'grant-gatehouse-1', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
       schedule_at: '2026-11-02T08:05:00.000Z', expires_at: '2026-11-02T09:00:00.000Z',
       trace_id: 'trace-1', idempotency_key: 'decision-1' })
     const withdrawn = h.bridge.withdraw(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
@@ -174,7 +176,7 @@ describe('approval bridge', () => {
       trace_id: 'trace-2', idempotency_key: 'execute-1' })).toThrowError(/pending_review/)
 
     const renewed = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
-      comment: '', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      comment: '', grant_id: 'grant-gatehouse-2', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
       schedule_at: '2026-11-02T08:30:00.000Z', expires_at: '2026-11-02T09:30:00.000Z',
       trace_id: 'trace-renew', idempotency_key: 'decision-2' })
     expect(renewed.proposal).toMatchObject({ status: 'approved', grant: { status: 'active' } })
