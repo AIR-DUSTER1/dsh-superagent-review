@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { composeReviewAcknowledgement, composeScheduleNotification } from '../src/app/review-messages.ts'
+import { composeReviewAcknowledgement, composeScheduleNotification, composeScheduleUpdatedNotification,
+  composeScheduleWithdrawnNotification } from '../src/app/review-messages.ts'
 
 describe('review messages', () => {
   it('hands a reviewed issue to development without claiming any action', () => {
@@ -17,5 +18,12 @@ describe('review messages', () => {
     expect(message).toContain('2026年11月2日 16:05（北京时间）')
     expect(message).toContain('这是开发开始时间，不是完成时间。')
     expect(message).toContain('还需要测试和部署')
+  })
+
+  it('explains changed and withdrawn schedules without implying completion', () => {
+    expect(composeScheduleUpdatedNotification('2026-11-02T08:15:00.000Z', 'zh-CN'))
+      .toContain('这是调整后的开发开始时间，不是完成时间。')
+    expect(composeScheduleWithdrawnNotification('zh-CN'))
+      .toContain('需求已重新进入人工复核')
   })
 })

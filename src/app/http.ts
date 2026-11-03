@@ -164,6 +164,8 @@ function routes(runtime: HttpHost): Routes {
     'GET proposals': () => ({ items: approval().list() }),
     'GET proposals/:id': ({ params }) => approval().get(params.id),
     'POST proposals/:id/decision': async ({ params, body }) => approval().decide(params.id, await body(1_048_576)),
+    'POST proposals/:id/reschedule': async ({ params, body }) => approval().reschedule(params.id, await body(1_048_576)),
+    'POST proposals/:id/withdraw': async ({ params, body }) => approval().withdraw(params.id, await body(1_048_576)),
     'POST executions': async ({ body }) => approval().execute(await body(1_048_576)),
     'GET overview': () => overview(views(runtime), runtime.health, policyVersion(store.settings()),
       executorLoad(store, runtime.executor.activeCount()), runtime.setupProblem ?? runtime.feishuProblem),

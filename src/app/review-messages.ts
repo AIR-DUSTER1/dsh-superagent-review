@@ -33,3 +33,18 @@ export function composeScheduleNotification(scheduleAt: string, language: Respon
     ? `开发排期已确认：${time}（北京时间）开始。\n\n这是开发开始时间，不是完成时间。开发完成后还需要测试和部署，请耐心等待后续结果。`
     : `Development is scheduled to start at ${time} (Asia/Shanghai).\n\nThis is the development start time, not the completion time. Testing and deployment still follow, so please wait for the next update.`)
 }
+
+/** Compose a changed-schedule notice while keeping the same start-versus-completion distinction. */
+export function composeScheduleUpdatedNotification(scheduleAt: string, language: ResponseLanguage): string {
+  const time = shanghaiTime(scheduleAt, language)
+  return checkedImText(language === 'zh-CN'
+    ? `开发排期已调整：${time}（北京时间）开始。\n\n这是调整后的开发开始时间，不是完成时间。开发后仍需测试和部署，请耐心等待后续结果。`
+    : `The development schedule has changed: it will start at ${time} (Asia/Shanghai).\n\nThis is the updated development start time, not the completion time. Testing and deployment still follow, so please wait for the next update.`)
+}
+
+/** Tell the requester that the approved schedule was withdrawn and requires review again. */
+export function composeScheduleWithdrawnNotification(language: ResponseLanguage): string {
+  return checkedImText(language === 'zh-CN'
+    ? '本次开发排期已撤回，需求已重新进入人工复核。新的复核和排期完成前不会开始开发。'
+    : 'The development schedule has been withdrawn and the request is back in human review. Development will not start until it is approved and scheduled again.')
+}

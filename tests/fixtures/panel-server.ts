@@ -391,6 +391,8 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET proposals': { answer: () => ({ items: [] }) },
   'GET proposals/:id': { answer: () => refuse(404, 'Proposal not found') },
   'POST proposals/:id/decision': { body: true, answer: () => refuse(404, 'Proposal not found') },
+  'POST proposals/:id/reschedule': { body: true, answer: () => refuse(404, 'Proposal not found') },
+  'POST proposals/:id/withdraw': { body: true, answer: () => refuse(404, 'Proposal not found') },
   'POST executions': { body: true, answer: () => refuse(404, 'Proposal not found') },
   'POST prompts/preview': { body: true, answer: ({ body }) => {
     const skills = [...server.setup.accounts?.feishu ? ['feishu'] : [], 'github', ...Object.keys(body.skills)].map(name => [name,
