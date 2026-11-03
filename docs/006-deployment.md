@@ -211,7 +211,7 @@ The blocks:
 - `eval`: `mode`, `timeoutSeconds` and `model`.
 - `executor`: `model`, `maxWorkers`, `directory`, `prepare` and `blockedCommands`. The processing pause is a setting of its own, `paused`, which `POST executor/pause` sets.
 
-Changing a repository or CLI runs the corresponding setup check first. A failed check returns 400 with details in `setup`. A successful account change, or any save while setup is pending, returns `restarting: true`. The API is temporarily unavailable while the application restarts.
+Changing a repository or CLI runs the corresponding setup check first. A failed check returns 400 with details in `setup`. A successful account change, or any save while setup is pending, returns `restarting: true`. The API is temporarily unavailable while the application restarts. After the repository changes, subscribed Issues and pull requests read in the previous repository are left unread, so they do not report 404 failures against the new one; its pending notification retries are dropped, and Threads of the watched repository keep polling.
 
 ```sh
 api=http://127.0.0.1:3082/orchestrator/api

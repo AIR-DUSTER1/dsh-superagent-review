@@ -70,7 +70,8 @@ export async function observePull(ctx: SourceContext, pr: Pull): Promise<boolean
 function bind(ctx: SourceContext, ticketId: string, pr: Pull, own: boolean): void {
   ctx.atomic(() => {
     ctx.tickets.bindThread(ticketId, { source: SOURCE, id: String(pr.number) }, own)
-    ctx.threads.patch(`github:${pr.number}`, { number: pr.number, isPr: true, url: pr.html_url, prAuthor: pr.user.login })
+    ctx.threads.patch(`github:${pr.number}`, { number: pr.number, isPr: true, url: pr.html_url, prAuthor: pr.user.login,
+      repository: ctx.deployment.repository })
   })
 }
 /**
