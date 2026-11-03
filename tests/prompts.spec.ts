@@ -44,6 +44,16 @@ it('saves team sections and skills as versions that survive a restart, with hist
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }) }
 })
 
+it('injects the configured response language into both role prompts', () => {
+  const config = defaultPrompts()
+  withStore(store => {
+    const prompts = promptsOf(store)
+    expect(prompts.compose(config, 'orchestrator')).toContain('Write all user-facing prose in Simplified Chinese')
+    expect(prompts.compose(config, 'worker')).toContain('Write all user-facing prose in Simplified Chinese')
+    expect(composePrompt(config, 'worker', undefined, undefined, 'en')).toContain('Write all user-facing prose in English')
+  })
+})
+
 it('assembles every role from fixed sections around the team sections, whatever the configuration says', () => {
   const config = { communication: 'Say little.', scope: '', delivery: 'Attach screenshots.', skills: {} }
   for (const role of ['orchestrator', 'worker'] as const) {

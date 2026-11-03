@@ -100,7 +100,9 @@ Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) t
 
 After the first start, edit machine limits in **Settings → Deployment** or the DeepSeek Harness Plugin Manager. Changes apply without restart. `stateDir` cannot be changed there. Invalid values or unknown configuration keys prevent startup; the log identifies the key.
 
-Set the accept mode to `review` in **Settings → Eval**. The external console routes are `POST /orchestrator/api/proposals/:id/decision` and `POST /orchestrator/api/executions`; both require timestamp, nonce and HMAC headers.
+Set the accept mode to `review` in **Settings → Eval**.
+
+Set the response language in **Settings → Eval → Response language**; it defaults to Simplified Chinese and applies to agent-authored assessments, proposals, notifications, PR text, and comments. The external console routes are `POST /orchestrator/api/proposals/:id/decision` and `POST /orchestrator/api/executions`; both require timestamp, nonce and HMAC headers.
 
 ## Start and stop
 

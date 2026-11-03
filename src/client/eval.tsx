@@ -204,6 +204,13 @@ function EvalBlock() {
           options={(['off', 'observe', 'review', 'auto'] as const).map(mode => ({ value: mode, label: valueLabel(t, 'mode', mode),
             title: t(`modeOption.${mode}`) }))} />
       </Section>
+      <Field label={t('responseLanguage')} hint={t('responseLanguageHint')}>
+        <SegmentedControl className="dt-segmented" label={t('responseLanguage')} value={value.language} onChange={language => edit({ language })}
+          options={[
+            { value: 'zh-CN', label: t('languageOption.zhCN'), title: t('languageOption.zhCN') },
+            { value: 'en', label: t('languageOption.en'), title: t('languageOption.en') },
+          ]} />
+      </Field>
       <Field label={t('evalTimeout')} hint={t('evalTimeoutHint')}>
         <Input type="number" min={LIMITS.evalTimeoutSeconds.min} max={LIMITS.evalTimeoutSeconds.max} required value={value.timeoutSeconds}
           onChange={event => edit({ timeoutSeconds: event.target.value })} />

@@ -83,6 +83,7 @@ export const PolicyConfigSchema = z.object({
 }).strict()
 export const EvalConfigSchema = z.object({
   mode: z.enum(['off', 'observe', 'review', 'auto']).default('observe'),
+  language: z.enum(['zh-CN', 'en']).default('zh-CN'),
   timeoutSeconds: z.number().int().min(LIMITS.evalTimeoutSeconds.min).max(LIMITS.evalTimeoutSeconds.max).default(120),
   model: RoleModelSchema.nullable().default(null),
 }).strict()

@@ -99,7 +99,14 @@ export function policySection(settings: Settings, config: PromptConfig = default
  * Assemble a role's system prompt sections in order from fixed templates, team sections, the generated execution environment
  * and, last, the main Session's generated Policy section, which nothing follows, and whose change leaves the rest unchanged.
  */
-export function promptParts(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }) {
+/** The language agents use for human-facing prose; code and identifiers stay verbatim. */
+export type ResponseLanguage = Settings['eval']['language']
+const RESPONSE_LANGUAGE_TEXT: Record<ResponseLanguage, string> = {
+  'zh-CN': '## Response language\nWrite all user-facing prose in Simplified Chinese, including assessments, proposals, risk explanations, test plans, acknowledgements, questions, notifications, PR descriptions, review replies, and Feishu or GitHub comments. Keep code, commands, file paths, identifiers, API names, and quoted source text unchanged. If the source explicitly requests another language, follow that request.',
+  en: '## Response language\nWrite all user-facing prose in English, including assessments, proposals, risk explanations, test plans, acknowledgements, questions, notifications, PR descriptions, review replies, and Feishu or GitHub comments. Keep code, commands, file paths, identifiers, API names, and quoted source text unchanged. If the source explicitly requests another language, follow that request.',
+}
+export function responseLanguageSection(language: ResponseLanguage): string { return RESPONSE_LANGUAGE_TEXT[language] }
+export function promptParts(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }, language?: ResponseLanguage) {
   // A built-in part names the key its text is overridden by, which for the handoff names the role.
   const fixed = (name: string, part = name) => ({ name, kind: 'fixed' as const, key: part, text: builtIn(config, part as PartKey) })
   const team = (name: TeamSection) => ({ name, kind: 'team' as const, heading: `## ${TEAM_HEADINGS[name]}`,
@@ -107,6 +114,7 @@ export function promptParts(config: PromptConfig, role: Role, environment?: stri
   return [
     fixed('runtime/shared'), fixed(`runtime/${role}`),
     ...TEAM_SECTIONS.map(team),
+    ...language ? [{ name: 'runtime/language', kind: 'generated' as const, key: 'runtime/language', text: responseLanguageSection(language) }] : [],
     ...['subscriptions', 'replies', role === 'orchestrator' ? 'dispatch' : 'work'].map(name => fixed(`runtime/${name}`)),
     ...role === 'orchestrator' ? [fixed('runtime/admission')] : [],
     fixed('runtime/handoff', `runtime/handoff/${role}`),
@@ -114,8 +122,8 @@ export function promptParts(config: PromptConfig, role: Role, environment?: stri
     ...role === 'orchestrator' && policy ? [{ name: 'runtime/policy', kind: 'generated' as const, ...policy }] : [],
   ].filter(part => part.text)
 }
-export function composePrompt(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }): string {
-  return promptParts(config, role, environment, policy).map(part => part.text).join('\n\n')
+export function composePrompt(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }, language?: ResponseLanguage): string {
+  return promptParts(config, role, environment, policy, language).map(part => part.text).join('\n\n')
 }
 export function composeSkill(config: PromptConfig, name: string): string {
   return name === 'feishu' || name === 'github' ? builtIn(config, `skill/${name}`) : config.skills[name] ?? ''
@@ -140,7 +148,8 @@ export class Prompts {
   }
   /** A role's prompt; the main Session's Policy section follows the settings as they are now, at each model request. */
   compose(config: PromptConfig, role: Role, variables = this.environment()): string {
-    return composePrompt(config, role, environmentSection(config, variables), role === 'orchestrator' ? policySection(this.store.settings(), config) : undefined)
+    const settings = this.store.settings()
+    return composePrompt(config, role, environmentSection(config, variables), role === 'orchestrator' ? policySection(settings, config) : undefined, settings.eval.language)
   }
   /** Returns skills to register in every Session: built-in Source skills (`feishu` only when a Feishu bot is configured) followed by team skills. */
   skills(config: PromptConfig): [string, string][] {
@@ -194,9 +203,9 @@ export class Prompts {
   }
   preview(value: unknown) {
     const config = this.validate(value)
-    const environment = environmentSection(config, this.environment()), policy = policySection(this.store.settings(), config)
-    return { orchestrator: composePrompt(config, 'orchestrator', environment, policy), worker: composePrompt(config, 'worker', environment),
-      parts: { orchestrator: promptParts(config, 'orchestrator', environment, policy), worker: promptParts(config, 'worker', environment) },
+    const settings = this.store.settings(), environment = environmentSection(config, this.environment()), policy = policySection(settings, config)
+    return { orchestrator: composePrompt(config, 'orchestrator', environment, policy, settings.eval.language), worker: composePrompt(config, 'worker', environment, undefined, settings.eval.language),
+      parts: { orchestrator: promptParts(config, 'orchestrator', environment, policy, settings.eval.language), worker: promptParts(config, 'worker', environment, undefined, settings.eval.language) },
       skills: Object.fromEntries(this.skills(config)), scope: 'Team sections, skills, and overrides of built-in parts, which follow their built-in text until overridden. Workers additionally inherit the host prompt and repository AGENTS.md. Prompt text changes what the agents are told, not what dsh-superagent allows: tool permissions, the gate and account wrappers stay.' }
   }
   save(value: unknown, baseRevision: number, source: SettingsOrigin): PromptVersion {

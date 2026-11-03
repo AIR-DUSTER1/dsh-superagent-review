@@ -67,6 +67,10 @@ pnpm typecheck
 pnpm build
 ```
 
+## 回复语言
+
+在 `设置 → 评估 → 回复语言` 中选择 Agent 面向人的输出语言，默认是 **简体中文**。该设置影响调研结论、Proposal、风险说明、验证计划、通知、PR 描述和评论；代码、命令、路径、标识符和引用原文保持原样。
+
 ## 与 Gatehouse 联调
 
 ### 1. 配置 DSH Superagent Review
