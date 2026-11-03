@@ -47,6 +47,8 @@ export interface Api {
   'GET proposals': { response: { items: ApprovalProposal[] } }
   'GET proposals/:id': { response: ApprovalProposal }
   'POST proposals/:id/decision': { body: unknown; response: { proposal: ApprovalProposal; grant?: unknown; replayed: boolean } }
+  'POST proposals/:id/reschedule': { body: unknown; response: { proposal: ApprovalProposal; replayed: boolean } }
+  'POST proposals/:id/withdraw': { body: unknown; response: { proposal: ApprovalProposal; replayed: boolean } }
   'POST executions': { body: unknown; response: { execution_id: string; ticket_id: string; replayed: boolean } }
 }
 type Path<K> = K extends `${string} ${infer P}` ? P : never

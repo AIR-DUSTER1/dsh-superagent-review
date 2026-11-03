@@ -113,6 +113,79 @@ describe('approval bridge', () => {
     h.store.close()
   })
 
+  it('moves an active Grant to a new schedule before execution', () => {
+    const h = harness()
+    accept(h)
+    const proposal = h.bridge.list()[0]!
+    h.tick(60_000)
+    const approved = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
+      comment: '', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      schedule_at: '2026-11-02T08:05:00.000Z', expires_at: '2026-11-02T09:00:00.000Z',
+      trace_id: 'trace-1', idempotency_key: 'decision-1' })
+
+    const changed = h.bridge.reschedule(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      schedule_at: '2026-11-02T08:15:00.000Z', expires_at: '2026-11-02T09:15:00.000Z',
+      trace_id: 'trace-change', idempotency_key: 'change-1' })
+    expect(changed.proposal.grant).toMatchObject({ schedule_at: '2026-11-02T08:15:00.000Z', status: 'active' })
+    expect(changed.proposal.schedule_change).toMatchObject({ revision: 1 })
+    expect(h.delivered.some(message => message.text.includes('开发排期已调整'))).toBe(true)
+
+    const changedAgain = h.bridge.reschedule(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      schedule_at: '2026-11-02T08:20:00.000Z', expires_at: '2026-11-02T09:20:00.000Z',
+      trace_id: 'trace-change-2', idempotency_key: 'change-2' })
+    const replayedOld = h.bridge.reschedule(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      schedule_at: '2026-11-02T08:15:00.000Z', expires_at: '2026-11-02T09:15:00.000Z',
+      trace_id: 'trace-change', idempotency_key: 'change-1' })
+    expect(replayedOld.replayed).toBe(true)
+    expect(changedAgain.proposal.grant?.schedule_at).toBe('2026-11-02T08:20:00.000Z')
+    expect(replayedOld.proposal.grant?.schedule_at).toBe('2026-11-02T08:20:00.000Z')
+
+    expect(() => h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',
+      trace_id: 'trace-2', idempotency_key: 'execute-1' })).toThrowError(/schedule has not arrived/)
+
+    h.tick(19 * 60_000)
+    const executed = h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',
+      trace_id: 'trace-2', idempotency_key: 'execute-1' })
+    expect(executed.ticket_id).toBe(key('ticket', 'approval', proposal.id))
+    h.store.close()
+  })
+
+  it('withdraws an active Grant and allows a fresh approval', () => {
+    const h = harness()
+    accept(h)
+    const proposal = h.bridge.list()[0]!
+    h.tick(60_000)
+    const approved = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
+      comment: '', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      schedule_at: '2026-11-02T08:05:00.000Z', expires_at: '2026-11-02T09:00:00.000Z',
+      trace_id: 'trace-1', idempotency_key: 'decision-1' })
+    const withdrawn = h.bridge.withdraw(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, reason: '排期调整',
+      trace_id: 'trace-withdraw', idempotency_key: 'withdraw-1' })
+    expect(withdrawn.proposal).toMatchObject({ status: 'pending_review', grant: { status: 'revoked' } })
+    expect(h.delivered.some(message => message.text.includes('开发排期已撤回'))).toBe(true)
+    expect(() => h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',
+      trace_id: 'trace-2', idempotency_key: 'execute-1' })).toThrowError(/pending_review/)
+
+    const renewed = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
+      comment: '', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      schedule_at: '2026-11-02T08:30:00.000Z', expires_at: '2026-11-02T09:30:00.000Z',
+      trace_id: 'trace-renew', idempotency_key: 'decision-2' })
+    expect(renewed.proposal).toMatchObject({ status: 'approved', grant: { status: 'active' } })
+    const oldWithdrawal = h.bridge.withdraw(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, reason: '排期调整',
+      trace_id: 'trace-withdraw', idempotency_key: 'withdraw-1' })
+    expect(oldWithdrawal.replayed).toBe(true)
+    expect(h.bridge.get(proposal.id)).toMatchObject({ status: 'approved', grant: { status: 'active' } })
+    h.store.close()
+  })
+
   it('verifies console HMAC, rejects replay, and delivers queued events idempotently', async () => {
     const h = harness()
     accept(h)

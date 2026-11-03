@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { key, type DomainEvent, type EngineForApproval, type Outbox, type ReviewProposalDraft } from '../core/index.ts'
 import { KV } from '../kv.ts'
 import type { Store } from './store.ts'
-import { composeScheduleNotification } from './review-messages.ts'
+import { composeScheduleNotification, composeScheduleUpdatedNotification, composeScheduleWithdrawnNotification } from './review-messages.ts'
 
 export type ApprovalRisk = 'low' | 'medium' | 'high' | 'critical'
 export type ApprovalStatus = 'pending_review' | 'info_requested' | 'approved' | 'rejected' | 'scheduled' | 'executing' | 'completed' | 'failed' | 'superseded'
@@ -58,6 +58,10 @@ export interface ApprovalProposal {
   decision?: { type: 'approve' | 'reject' | 'request_info'; reviewer: string; comment: string; idempotency_key: string; request_hash: string; at: string }
   grant?: ApprovalGrant
   execution?: ApprovalExecution
+  schedule_change?: { idempotency_key: string; request_hash: string; schedule_at: string; expires_at: string; revision: number; at: string }
+  schedule_changes?: Array<{ idempotency_key: string; request_hash: string; schedule_at: string; expires_at: string; revision: number; at: string }>
+  revocation?: { idempotency_key: string; request_hash: string; reason: string; at: string }
+  revocations?: Array<{ idempotency_key: string; request_hash: string; reason: string; at: string }>
 }
 
 export interface ApprovalConsoleEvent {
@@ -94,6 +98,27 @@ export const ApprovalExecutionSchema = z.object({
   requirement_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   scope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   execution_id: z.string().min(1).max(300),
+  trace_id: z.string().min(1),
+  idempotency_key: z.string().min(1).max(300),
+}).strict()
+
+export const ApprovalScheduleChangeSchema = z.object({
+  proposal_id: z.string().min(1),
+  grant_id: z.string().min(1),
+  requirement_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  scope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  schedule_at: z.iso.datetime({ offset: true }),
+  expires_at: z.iso.datetime({ offset: true }),
+  trace_id: z.string().min(1),
+  idempotency_key: z.string().min(1).max(300),
+}).strict()
+
+export const ApprovalWithdrawalSchema = z.object({
+  proposal_id: z.string().min(1),
+  grant_id: z.string().min(1),
+  requirement_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  scope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  reason: z.string().trim().max(1000).default(''),
   trace_id: z.string().min(1),
   idempotency_key: z.string().min(1).max(300),
 }).strict()
@@ -250,6 +275,76 @@ export class ApprovalBridge {
       }
     })
     return { proposal, ...(grant ? { grant } : {}), replayed: false }
+  }
+
+  /** Move an active Grant to a new schedule and notify the requester. */
+  reschedule(id: string, raw: unknown): { proposal: ApprovalProposal; replayed: boolean } {
+    const body = ApprovalScheduleChangeSchema.parse(raw)
+    if (body.proposal_id !== id) throw new ApprovalError('PROPOSAL_MISMATCH', 409, 'Path and body proposal_id do not match')
+    const current = this.get(id)
+    const requestHash = jsonHash({ proposalId: id, body })
+    const previousChange = current.schedule_changes?.find(change => change.idempotency_key === body.idempotency_key)
+    if (previousChange) {
+      if (previousChange.request_hash !== requestHash) throw new ApprovalError('IDEMPOTENCY_CONFLICT', 409, 'The idempotency key was reused with different content')
+      return { proposal: current, replayed: true }
+    }
+    if (current.status !== 'approved') throw new ApprovalError('PROPOSAL_NOT_APPROVED', 409, `Proposal is ${current.status}`)
+    const grant = current.grant
+    if (!grant || grant.id !== body.grant_id) throw new ApprovalError('GRANT_NOT_FOUND', 409, 'The ApprovalGrant does not match this Proposal')
+    if (grant.status !== 'active' || grant.consumed_at) throw new ApprovalError('GRANT_CONSUMED', 409, 'The ApprovalGrant is no longer active')
+    if (current.requirement_hash !== body.requirement_hash) throw new ApprovalError('REQUIREMENT_CHANGED', 409, 'The requirement changed after approval')
+    if (current.scope_hash !== body.scope_hash) throw new ApprovalError('SCOPE_CHANGED', 409, 'The execution scope changed after approval')
+    const at = this.now()
+    const schedule = new Date(body.schedule_at).toISOString()
+    const expires = new Date(body.expires_at).toISOString()
+    if (Date.parse(schedule) <= Date.parse(at)) throw new ApprovalError('SCHEDULE_IN_PAST', 400, 'The new schedule must be in the future')
+    if (Date.parse(expires) <= Date.parse(schedule)) throw new ApprovalError('INVALID_GRANT_EXPIRY', 400, 'expires_at must be after schedule_at')
+    const revision = (current.schedule_change?.revision ?? 0) + 1
+    const change = { idempotency_key: body.idempotency_key, request_hash: requestHash,
+      schedule_at: schedule, expires_at: expires, revision, at }
+    const proposal: ApprovalProposal = { ...current, updated_at: at,
+      grant: { ...grant, schedule_at: schedule, expires_at: expires },
+      schedule_change: change, schedule_changes: [...current.schedule_changes ?? [], change].slice(-50) }
+    this.store().atomic(() => {
+      this.store().set(KV.approval.proposal(id), proposal)
+      if (current.draft.trigger.channel && current.draft.trigger.human) {
+        this.host.outbox.send({ id: key('approval-reschedule', body.idempotency_key), channel: current.draft.trigger.channel,
+          text: composeScheduleUpdatedNotification(schedule, this.store().settings().eval.language), kind: 'reply' })
+      }
+    })
+    return { proposal, replayed: false }
+  }
+
+  /** Revoke an active Grant, return the Proposal to review, and notify the requester. */
+  withdraw(id: string, raw: unknown): { proposal: ApprovalProposal; replayed: boolean } {
+    const body = ApprovalWithdrawalSchema.parse(raw)
+    if (body.proposal_id !== id) throw new ApprovalError('PROPOSAL_MISMATCH', 409, 'Path and body proposal_id do not match')
+    const current = this.get(id)
+    const requestHash = jsonHash({ proposalId: id, body })
+    const previousRevocation = current.revocations?.find(revocation => revocation.idempotency_key === body.idempotency_key)
+    if (previousRevocation) {
+      if (previousRevocation.request_hash !== requestHash) throw new ApprovalError('IDEMPOTENCY_CONFLICT', 409, 'The idempotency key was reused with different content')
+      return { proposal: current, replayed: true }
+    }
+    if (current.status !== 'approved') throw new ApprovalError('PROPOSAL_NOT_APPROVED', 409, `Proposal is ${current.status}`)
+    const grant = current.grant
+    if (!grant || grant.id !== body.grant_id) throw new ApprovalError('GRANT_NOT_FOUND', 409, 'The ApprovalGrant does not match this Proposal')
+    if (grant.status !== 'active' || grant.consumed_at) throw new ApprovalError('GRANT_CONSUMED', 409, 'The ApprovalGrant is no longer active')
+    if (current.requirement_hash !== body.requirement_hash) throw new ApprovalError('REQUIREMENT_CHANGED', 409, 'The requirement changed after approval')
+    if (current.scope_hash !== body.scope_hash) throw new ApprovalError('SCOPE_CHANGED', 409, 'The execution scope changed after approval')
+    const at = this.now()
+    const revocation = { idempotency_key: body.idempotency_key, request_hash: requestHash, reason: body.reason, at }
+    const proposal: ApprovalProposal = { ...current, status: 'pending_review', updated_at: at,
+      grant: { ...grant, status: 'revoked' },
+      revocation, revocations: [...current.revocations ?? [], revocation].slice(-50) }
+    this.store().atomic(() => {
+      this.store().set(KV.approval.proposal(id), proposal)
+      if (current.draft.trigger.channel && current.draft.trigger.human) {
+        this.host.outbox.send({ id: key('approval-withdraw', body.idempotency_key), channel: current.draft.trigger.channel,
+          text: composeScheduleWithdrawnNotification(this.store().settings().eval.language), kind: 'reply' })
+      }
+    })
+    return { proposal, replayed: false }
   }
 
   /** Consume the Grant and create the Ticket only after every review binding has been rechecked. */

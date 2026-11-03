@@ -45,10 +45,13 @@ execution.started / execution.finished / execution.failed
 - Proposal、ApprovalGrant、执行状态和 console event outbox 持久化。
 - Console 事件 HMAC API。
 - 决策 API：`POST /orchestrator/api/proposals/:id/decision`。
+- 改期 API：`POST /orchestrator/api/proposals/:id/reschedule`。
+- 撤回 API：`POST /orchestrator/api/proposals/:id/withdraw`。
 - 执行 API：`POST /orchestrator/api/executions`。
 - 执行前重新校验需求哈希、范围哈希、排期和过期时间。
 - `Engine.executeProposal`：只在 Grant 验证通过后创建 Ticket。
 - 审批排期通知会说明该时间是开发开始时间，不是完成时间，并提示仍需测试和部署。
+- 改期会更新活动 Grant 并再次通知发起人；撤回会吊销 Grant、回到待复核并阻止旧授权执行。
 - Worker `failed` / `blocked` 报告回传 `execution.failed`。
 - gatehouse 风格的 Review 模式配置入口和双语提示。
 
