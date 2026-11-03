@@ -1156,6 +1156,8 @@ it('shows a failed reply as a problem with its attempts, an error of the reply e
   await at(5000); await at(15_000)
   expect(runtime.health.reply).toMatchObject({ state: 'error', detail: expect.stringContaining('2200') })
   expect(runtime.health.runtime).toMatchObject({ state: 'ready' })
+  // The outgoing row is the single operator-facing problem; the reply health is not repeated as a runtime error.
+  expect(overviewOf(runtime).problems.filter(problem => problem.kind === 'runtime-error' && problem.name === 'reply')).toEqual([])
   // A withdrawn reply takes its effect with it, which clears the error at once.
   runtime.outbox.withdraw('stuck')
   expect([outgoing(), runtime.health.reply, runtime.effects.pending('reply', 'stuck')])

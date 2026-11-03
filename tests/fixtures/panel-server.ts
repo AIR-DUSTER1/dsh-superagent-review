@@ -189,9 +189,9 @@ const overviewView = (): ApiResponse<'GET overview'> => {
         .map(thread => ({ kind: 'eval-overdue' as const, thread })),
       { kind: 'eval-unavailable' as const, decisionId: 'u1', thread: threadSummary(), reason: [{ code: 'timeout' }], triggerId: 'e3' },
       ...server.settings.paused ? [{ kind: 'executor-paused' as const }] : [],
-      // As on the host, every entry in error that is not a Source's own, a Policy sync, or the individually listed unavailable Evals is a runtime-error.
+      // As on the host, failed replies have their own outgoing rows, so they are not repeated as runtime errors.
       ...Object.entries(server.health).filter(([name, item]) => item.state === 'error' && !KINDS.some(kind => kind.health.includes(name))
-        && !name.startsWith('sync:') && name !== 'evals')
+        && !name.startsWith('sync:') && name !== 'evals' && name !== 'reply')
         .map(([name, item]) => ({ kind: 'runtime-error' as const, name, detail: item.detail })),
       ...Object.values(server.settings.policy.sources).some(part => part.allowed.length) ? [] : [{ kind: 'no-allowed' as const }],
       ...server.failing.map(outgoing => ({ kind: 'outgoing' as const, outgoing }))],

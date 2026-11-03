@@ -58,6 +58,26 @@ describe('account-isolated operations', () => {
     await send(commands, { ...reply, channel: feishuChannel('oc_1', 'om_1') })
     expect(run.mock.calls[0]![1]).toEqual(expect.arrayContaining(['--as','bot','--idempotency-key','stable-operation','--message-id','om_1']))
   })
+  it('does not request a thread reply for a Feishu top-level message', async () => {
+    const commands = new Commands(() => deployment, {}, new AbortController().signal); const run = vi.spyOn(commands,'run').mockResolvedValue('{"ok":true,"data":{}}')
+    await send(commands, { ...reply, channel: feishuChannel('oc_1', 'om_1', false, false) })
+    expect(run.mock.calls[0]![1]).not.toContain('--reply-in-thread')
+  })
+  it('keeps a thread reply for a Feishu message that belongs to a thread', async () => {
+    const commands = new Commands(() => deployment, {}, new AbortController().signal); const run = vi.spyOn(commands,'run').mockResolvedValue('{"ok":true,"data":{}}')
+    await send(commands, { ...reply, channel: feishuChannel('oc_1', 'om_1', false, true) })
+    expect(run.mock.calls[0]![1]).toContain('--reply-in-thread')
+  })
+  it('retries a legacy thread reply without the thread flag after Feishu error 2200', async () => {
+    const commands = new Commands(() => deployment, {}, new AbortController().signal)
+    const run = vi.spyOn(commands, 'run').mockRejectedValueOnce(commandError({ stderr: JSON.stringify({ error: { code: 2200, message: 'Something went wrong' } }), code: 1 }))
+      .mockResolvedValueOnce('{"ok":true,"data":{}}')
+    const legacy = { ...reply, channel: { ...feishuChannel('oc_1', 'om_1'), address: { chatId: 'oc_1', messageId: 'om_1' } } }
+    await expect(send(commands, legacy)).resolves.toBe('sent')
+    expect(run.mock.calls[0]![1]).toContain('--reply-in-thread')
+    expect(run.mock.calls[1]![1]).not.toContain('--reply-in-thread')
+    expect(run.mock.calls[1]![1]).toEqual(expect.arrayContaining(['--idempotency-key', 'stable-operation']))
+  })
 })
 
 it('reports Feishu failures with their code and without command arguments', () => {

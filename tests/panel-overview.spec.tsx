@@ -146,6 +146,7 @@ it('says when no Source is on, an Eval is past its deadline or a message keeps f
   server.failing = [{ id: 'm1', channel: { source: 'github', thread: 'github:42', address: { number: '42' } },
     text: '已修复', attempts: 4,
     error: 'HTTP 502 from GitHub' }]
+  server.health = { ...server.health, reply: { state: 'error', detail: 'HTTP 502 from GitHub' } }
   await mount()
   const titles = () => all('.dt-cards .dt-att-what').map(item => item.textContent)
   // The Feishu Source is off, so its error is no problem any more.

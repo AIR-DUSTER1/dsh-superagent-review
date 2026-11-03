@@ -15,16 +15,30 @@ export const feishuChatLink = (brand: 'feishu' | 'lark', chatId: string): string
  */
 const gone = (error: unknown): boolean => error instanceof CliError && error.code !== undefined && (error.code === 230011
   || /withdrawn/i.test(error.message) || (Math.floor(error.code / 100) === 2300 && /not found/i.test(error.message)))
-/** Replies in the topic of the target message; Feishu keeps at most one reply per idempotency key (the outgoing message's `message.id`). */
+/** Posts a bot reply, inside the target thread when the message belongs to one; one idempotency key prevents duplicates. */
 export async function sendFeishu(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
   const messageId = message.channel.address.messageId
   if (!messageId) throw new Error('Missing Feishu reply target')
   const text = checkedImText(message.text)
-  const reply = ['im', '+messages-reply', '--message-id', messageId, '--markdown', text, '--reply-in-thread', '--idempotency-key', message.id]
+  // New Trigger channels record whether their message belongs to a thread. Legacy addresses lack the marker and keep
+  // the old thread-first behavior, with the fallback below for a Feishu top-level message rejected by that mode.
+  const threaded = message.channel.address.threaded !== 'false'
+  const reply = ['im', '+messages-reply', '--message-id', messageId, '--markdown', text,
+    ...threaded ? ['--reply-in-thread'] : [], '--idempotency-key', message.id]
   try { await host.commands.lark(reply) }
   catch (error) {
-    if (gone(error)) return 'gone'
-    throw error
+    // Feishu 2200 is generic, but thread replies to a top-level message are a known cause. Retrying the same
+    // idempotency key without the thread flag keeps this message deliverable without duplicating an uncertain send.
+    if (threaded && error instanceof CliError && error.code === 2200) {
+      try { await host.commands.lark(reply.filter(arg => arg !== '--reply-in-thread')) }
+      catch (fallback) {
+        if (gone(fallback)) return 'gone'
+        throw fallback
+      }
+    } else {
+      if (gone(error)) return 'gone'
+      throw error
+    }
   }
   return 'sent'
 }
