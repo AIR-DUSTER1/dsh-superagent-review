@@ -1,9 +1,10 @@
 /** Durable Proposal and ApprovalGrant bridge between dsh-superagent and the review console. */
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
-import { key, type DomainEvent, type EngineForApproval, type ReviewProposalDraft } from '../core/index.ts'
+import { key, type DomainEvent, type EngineForApproval, type Outbox, type ReviewProposalDraft } from '../core/index.ts'
 import { KV } from '../kv.ts'
 import type { Store } from './store.ts'
+import { composeScheduleNotification } from './review-messages.ts'
 
 export type ApprovalRisk = 'low' | 'medium' | 'high' | 'critical'
 export type ApprovalStatus = 'pending_review' | 'info_requested' | 'approved' | 'rejected' | 'scheduled' | 'executing' | 'completed' | 'failed' | 'superseded'
@@ -121,6 +122,7 @@ function scopeItems(scope: string): string[] {
 export interface ApprovalBridgeHost {
   store: Store
   engine: EngineForApproval
+  outbox: Pick<Outbox, 'send'>
   console?: ApprovalConsoleConfig | undefined
   now?: () => string
   fetcher?: typeof fetch
@@ -204,6 +206,10 @@ export class ApprovalBridge {
       }
       this.store().set(KV.approval.proposal(proposal.id), proposal)
       this.enqueue(this.proposalEvent(proposal, 'proposal.created'))
+      if (draft.outcome.acknowledgement && draft.trigger.channel && draft.trigger.human) {
+        this.host.outbox.send({ id: key('ack', draft.trigger.id), channel: draft.trigger.channel,
+          text: draft.outcome.acknowledgement, kind: 'acknowledgement' })
+      }
     })
     return proposal
   }
@@ -236,7 +242,13 @@ export class ApprovalBridge {
       decision: { type: body.decision, reviewer: body.reviewer, comment: body.comment,
         idempotency_key: body.idempotency_key, request_hash: requestHash, at },
       ...(grant ? { grant } : {}) }
-    this.store().atomic(() => this.store().set(KV.approval.proposal(id), proposal))
+    this.store().atomic(() => {
+      this.store().set(KV.approval.proposal(id), proposal)
+      if (grant && current.draft.trigger.channel && current.draft.trigger.human) {
+        this.host.outbox.send({ id: key('approval-schedule', proposal.id), channel: current.draft.trigger.channel,
+          text: composeScheduleNotification(grant.schedule_at, this.store().settings().eval.language), kind: 'reply' })
+      }
+    })
     return { proposal, ...(grant ? { grant } : {}), replayed: false }
   }
 

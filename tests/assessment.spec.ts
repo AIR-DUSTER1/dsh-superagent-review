@@ -3,17 +3,18 @@ import { expect, it, vi } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { AssessmentSchema, EvalReadSchema, MasterAssessor, type AssessorHost } from '../src/app/assessment.ts'
 import { mainAdmissionPolicy } from '../src/app/context.ts'
-import { Engine, MemoryRepositories, type Executor, type Policy, type Trigger } from '../src/core/index.ts'
+import { Engine, MemoryRepositories, type Executor, type Policy, type ReviewProposalDraft, type Trigger } from '../src/core/index.ts'
 import type { Commands } from '../src/infra/commands.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 import { deferred } from './fixtures/async.ts'
 import { githubKind } from '../src/sources/github.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
+import { composeReviewAcknowledgement } from '../src/app/review-messages.ts'
 
 /** Assessor fixture backed by in-memory repositories and fake GitHub Issue and file reads. */
 function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.from({ length: 5 }, (_, i) => `comment ${i}`),
-  threadContext?: AssessorHost['threadContext']) {
+  threadContext?: AssessorHost['threadContext'], options: { review?: boolean; reviewProposal?: (draft: ReviewProposalDraft) => void } = {}) {
   const comments = bodies.map((body, i) => ({ id: i, html_url: `https://github.com/acme/widgets/issues/1#c${i}`,
     user: { login: 'bob' }, created_at: '2026-09-09T00:00:00Z', body }))
   const gate = { issue: undefined as Promise<void> | undefined }
@@ -33,21 +34,23 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.fr
       : (schema as { parse(value: unknown): unknown }).parse(await (commands as unknown as { gh(args: string[]): Promise<unknown> }).gh(['api', rest[0]!]))),
   } as unknown as Commands
   const repo = new MemoryRepositories()
-  const sources = new SourceRegistry(() => SettingsSchema.parse({}))
+  const settings = SettingsSchema.parse(options.review ? { eval: { mode: 'review' } } : {})
+  const sources = new SourceRegistry(() => settings)
   sources.register(githubKind)
   let engine!: Engine
   const host: AssessorHost = {
-    get engine() { return engine }, commands, deployment: testDeployment(), settings: () => SettingsSchema.parse({}),
+    get engine() { return engine }, commands, deployment: testDeployment(), settings: () => settings,
     threadContext: threadContext ?? (trigger => sources.threadContext(trigger)),
     effects: { enqueue: () => {}, handle: () => {} }, paused: () => false, deliver: async () => {}, candidateCard: async candidate => ({ eval_id: candidate.evalId }),
   }
   const assessor = new MasterAssessor(host)
   const policy: Policy = { version: 'v1', paused: false, evalTimeoutMs: 600_000, gate: () => ({ admissible: true, strength, basis: { via: 'followup' } }),
-    revalidate: () => true, admitsInferred: rules => rules.length > 0 }
+    revalidate: () => true, admitsInferred: rules => rules.length > 0, ...(options.review ? { reviewOnly: true } : {}) }
   const executor: Executor = { start: async () => {}, deliver: async () => {}, stop: async () => {} }
   const scope = { scope: () => ({ listened: true as const, observed: true }) }
   const outbox = { send: () => {}, status: () => undefined, withdraw: () => {} }
-  engine = new Engine({ repo, policy: () => policy, scope, assessor, executor, outbox })
+  engine = new Engine({ repo, policy: () => policy, scope, assessor, executor, outbox,
+    ...(options.reviewProposal ? { reviewProposal: options.reviewProposal } : {}) })
   const tools: Record<string, (args: unknown, signal: AbortSignal) => Promise<unknown>> = {}
   tools.orchestrator_eval_read = (args, signal) => assessor.read({} as Agent, EvalReadSchema.parse(args), signal)
   tools.orchestrator_eval_decide = (args, signal) => {
@@ -62,6 +65,29 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.fr
 const issue = (n: number): Trigger => ({ id: `issue-${n}`, source: 'github', threads: [{ source: 'github', id: String(n) }], actor: { source: 'github', id: 'bob' }, human: true,
   at: new Date(Date.UTC(2026, 8, 9, 0, 0, n)).toISOString(), text: `issue ${n}`, url: `https://github.com/acme/widgets/issues/${n}`, meta: { number: n } })
 const signal = new AbortController().signal
+
+it('requires a plain requester explanation and composes the review handoff acknowledgement', async () => {
+  const drafts: ReviewProposalDraft[] = []
+  const s = setup('inferred', undefined, undefined, { review: true, reviewProposal: draft => drafts.push(draft) })
+  s.engine.receive(issue(1)); s.engine.evaluateDue()
+  const direction = { implementation_requested: true, target_basis: 'specified', requires_design_decision: false, evidence: 'requested fix' }
+  const rule_assessments = [
+    { rule_id: 'copy', matched: true, reason: 'requested copy correction' },
+    { rule_id: 'visual', matched: false, reason: 'no visual change' },
+  ]
+  const review = { summary: '修复旧订阅轮询', impact_files: ['src/sources/poll.ts'], test_plan: ['运行轮询测试'],
+    estimated_cost: '1-2 小时', risk: 'medium', risk_reason: '涉及订阅生命周期' }
+  const base = { trigger_id: 'issue-1', decision: 'accept', rule_assessments, direction, title: '修复旧订阅',
+    worktree_name: 'fix-stale-subscription', scope: '只修复旧订阅读取', intent_evidence: 'requested fix', reason: 'explicit request' }
+
+  await expect(s.tools.orchestrator_eval_decide!({ ...base, review }, signal))
+    .rejects.toThrow('review.requester_explanation')
+
+  const explanation = '这个报错来自切换仓库前遗留的旧仓库订阅；它仍在用新仓库读取 PR #1，所以每次轮询都会返回 404。'
+  await s.tools.orchestrator_eval_decide!({ ...base, review: { ...review, requester_explanation: explanation } }, signal)
+  expect(drafts).toHaveLength(1)
+  expect(drafts[0]!.outcome.acknowledgement).toBe(composeReviewAcknowledgement(explanation, 'zh-CN'))
+})
 
 it('keeps nothing for an Eval once it is decided, as for one that timed out', async () => {
   const s = setup()

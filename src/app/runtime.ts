@@ -159,7 +159,7 @@ export class Runtime extends Service implements SourceHost {
             for (const message of pullEndNotices(ended, request, setup.deployment.repository)) outbox.send(message)
           }
         } })
-      approval = new ApprovalBridge({ store, engine, console: machine.console })
+      approval = new ApprovalBridge({ store, engine, outbox, console: machine.console })
       this.approval = approval
       // Update the `evals` health entry on every pass if an evaluation failed as unavailable within the last hour.
       const evals = board.claim('evals', { state: 'ready', detail: 'No unavailable Eval in the last hour' })

@@ -14,12 +14,14 @@ import { relatedTickets } from './cards.ts'
 import { textPage } from './context.ts'
 import { AcknowledgementSchema } from './tools/tool.ts'
 import type { Effects } from './effects.ts'
+import { composeReviewAcknowledgement } from './review-messages.ts'
 
 /** Schema for a short lowercase kebab-case English ticket worktree name (1–4 words, at most 32 characters). */
 export const WorktreeNameSchema = z.string().max(32).regex(/^[a-z]+(?:-[a-z0-9]+){0,3}$/, 'Use 1–4 short English words in lowercase kebab-case, at most 32 characters').describe('Meaningful short English ticket name, e.g. fix-plan-color. Translate Chinese titles into English; no Chinese, pinyin or generic ticket names. 1–4 lowercase words in kebab-case, at most 32 characters.')
 /** Schema for the main Session's proactive candidate assessment decision (`orchestrator_eval_decide`). */
 export const ReviewDetailsSchema = z.object({
   summary: z.string().trim().min(1).max(1500).optional().describe('Review: concise implementation summary for the human reviewer.'),
+  requester_explanation: z.string().trim().min(1).max(600).optional().describe('Review: plain-language cause for the requester; never claim work already happened.'),
   impact_files: z.array(z.string().trim().min(1).max(500)).max(50).optional().describe('Review: repository files likely to change.'),
   test_plan: z.array(z.string().trim().min(1).max(500)).min(1).max(30).optional().describe('Review: verification steps the executor will follow.'),
   estimated_cost: z.string().trim().min(1).max(100).optional().describe('Review: rough effort, for example 2-3 hours.'),
@@ -281,8 +283,13 @@ export class MasterAssessor implements Assessor {
   async decide(triggerId: string, result: z.infer<typeof AssessmentSchema>, signal?: AbortSignal): Promise<{ state: string; ticket_id?: string; reason: string }> {
     const { candidate } = this.evalFor(triggerId)
     signal?.throwIfAborted()
-    let outcome: AssessmentOutcome = assessmentOutcome(result, this.host.settings(), candidate.strength)
-    if (outcome.kind === 'accept' && outcome.acknowledgement) outcome = { ...outcome, acknowledgement: checkedImText(outcome.acknowledgement) }
+    const settings = this.host.settings()
+    let outcome: AssessmentOutcome = assessmentOutcome(result, settings, candidate.strength)
+    if (outcome.kind === 'accept' && settings.eval.mode === 'review') {
+      const explanation = result.review?.requester_explanation?.trim()
+      if (!explanation) throw new Error('Review acceptance requires review.requester_explanation for the requester')
+      outcome = { ...outcome, acknowledgement: composeReviewAcknowledgement(explanation, settings.eval.language) }
+    } else if (outcome.kind === 'accept' && outcome.acknowledgement) outcome = { ...outcome, acknowledgement: checkedImText(outcome.acknowledgement) }
     const decision = this.host.engine.decide(triggerId, { ...outcome, evalId: candidate.evalId })
     return { state: decision.kind, ...(decision.ticketId ? { ticket_id: decision.ticketId } : {}), reason: reasonText(decision.reason) }
   }

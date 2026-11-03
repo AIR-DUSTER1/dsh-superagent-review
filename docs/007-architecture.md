@@ -212,11 +212,11 @@ Transient provider and network failures get three retries. Launches use effect b
 
 Its `context`, `read` and `decide` methods serve `orchestrator_eval`, `orchestrator_eval_read` and `orchestrator_eval_decide`. They provide bounded Thread context through `SourceRegistry.threadContext`, repository context, and decision submission. A kind without a context reader supplies only the Trigger and batch.
 
-`assessmentOutcome` converts the model's answer for `Engine.decide`. Evals checks inferred acceptance against the current Policy again. Review-mode accepts additionally carry the summary, impact files, test plan, cost and risk facts the console displays.
+`assessmentOutcome` converts the model's answer for `Engine.decide`. Evals checks inferred acceptance against the current Policy again. Review-mode accepts additionally carry the summary, impact files, test plan, cost and risk facts the console displays. They must also carry `review.requester_explanation`, a plain-language cause written for a non-technical requester. The assessor appends the fixed handoff/no-action status before the host posts it back to the source conversation; the explanation must not claim that any repair, cleanup or other action already happened.
 
 ### ApprovalBridge
 
-`ApprovalBridge` (`src/app/approval.ts`) is the only writer of review Proposals, ApprovalGrants and their console event outbox. EVAL review-mode acceptance calls `createProposal`; no Ticket is created. The console submits a signed decision, then a signed execution request at the scheduled time. `execute` rechecks both hashes, schedule and expiry, atomically consumes the Grant, and calls `Engine.executeProposal`, the only path that bypasses review interception and creates the Ticket under the Proposal's original Mandate. Engine Ticket lifecycle events update the Proposal and enqueue `execution.started`, `execution.finished` or `execution.failed`. A durable KV outbox retries console delivery with HMAC.
+`ApprovalBridge` (`src/app/approval.ts`) is the only writer of review Proposals, ApprovalGrants and their console event outbox. EVAL review-mode acceptance calls `createProposal`; no Ticket is created. It queues the requester handoff acknowledgement through the normal outbox, using the Proposal's original source Channel. On approval it queues a second acknowledgement with the confirmed development start time in Asia/Shanghai, explicitly distinguishing that start from completion and reminding the requester that testing and deployment still follow. The console submits a signed decision, then a signed execution request at the scheduled time. `execute` rechecks both hashes, schedule and expiry, atomically consumes the Grant, and calls `Engine.executeProposal`, the only path that bypasses review interception and creates the Ticket under the Proposal's original Mandate. Engine Ticket lifecycle events update the Proposal and enqueue `execution.started`, `execution.finished` or `execution.failed`. A durable KV outbox retries console delivery with HMAC.
 
 ### Settings
 
@@ -341,6 +341,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/role-models.ts` | Resolves the Eval and Executor models, and seeds a new Session with its role's model |
 | `src/app/assessment.ts` | The MasterAssessor, the assessment schema and the window `orchestrator_eval` answers |
 | `src/app/approval.ts` | The review-mode Proposal store, ApprovalGrant gate, execution entry and durable HMAC event outbox shared with the console |
+| `src/app/review-messages.ts` | The requester handoff acknowledgement and approved development-schedule notice in the configured response language |
 | `src/app/execution-environment.ts` | The execution environment: its variables, a Ticket's values, the directory root and the lines of the prompt section, which `src/app/prompts.ts` fills into its template |
 | `src/app/source-context.ts` | `sourceContextOf`: each Source kind's `SourceContext` |
 | `src/app/links.ts` | `sourceLink`, the page of a Trigger's message, and `candidateCard` |
@@ -412,6 +413,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | --- | --- |
 | `tests/core-engine.spec.ts` | Domain rules on in-memory repositories: receiving, Eval, fan-out, resume and stop, interrupted Assignments, the pause, Policy changes, reports and outcomes, attaching, replies, failed deliveries and dismissed problems |
 | `tests/approval-bridge.spec.ts` | Review-mode Proposal creation, no-Ticket invariant, ApprovalGrant consumption, HMAC verification and console event delivery |
+| `tests/review-messages.spec.ts` | The plain-language handoff acknowledgement and the development-start schedule notice |
 | `tests/stage.spec.ts` | The Ticket stages, row by row |
 | `tests/policy.spec.ts` | Source scope, the gate, the admission table, Mandate revalidation, the Policy version, settings migrations and assessment outcomes |
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
