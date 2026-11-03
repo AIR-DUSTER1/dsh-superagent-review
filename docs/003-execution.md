@@ -165,6 +165,8 @@ The GitHub Source reads each Issue, pull request and Thread on its own: a failed
 
 GitHub answers 404 also when the agent lost access to a private repository, so a 404 is retried.
 
+A Thread belongs to the repository it was read under. When the repository setting names another one, the Source leaves the Threads of the previous repository unread: they keep no polling error, do not count as failures, and are not read against the new repository until the setting names the previous one again. Pending notification retries of the previous repository are dropped with the change. A Thread takes its repository from its last read or from the Trigger or URL that named it, so a Thread left from before the setting changed is recognized as well.
+
 A notified Issue or pull request whose reads keep failing is dropped a day after its first failed read, and at once when GitHub reports it as deleted; it then no longer fails the poll, its Thread keeps the error, and the Source's state names it.
 
 Its read position stays where it was, so a later notification or a poll of its Thread reads what the failed reads missed.

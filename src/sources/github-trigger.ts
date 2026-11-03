@@ -9,10 +9,15 @@ export const githubChannel = (number: number, url?: string): ChannelRef =>
   ({ source: SOURCE, thread: `github:${number}`, address: { number: String(number), ...(url ? { url } : {}) } })
 export const githubPage = (repository: string, number: number, pr = false): string =>
   `https://github.com/${repository}/${pr ? 'pull' : 'issues'}/${number}`
+/** A web or API URL of an Issue, PR, or review comment, capturing the repository, the kind, the number, and a discussion comment. */
+const GITHUB_ADDRESS = /^https:\/\/(?:api\.github\.com\/repos|github\.com)\/([^/]+\/[^/]+)\/(issues|pulls?)\/(\d+)\/?(?:#discussion_r(\d+)|#[\w-]*)?$/i
+/** The `owner/name` a canonical Issue, PR, or review comment URL names; undefined for other URLs. */
+export function githubRepository(url: string): string | undefined {
+  return GITHUB_ADDRESS.exec(url)?.[1]
+}
 /** Parses a web or API URL for an Issue, PR, or review comment in `repository`; returns undefined for other URLs or repositories. */
 export function githubAddress(url: string, repository: string): { number: number; pr: boolean; discussion?: number } | undefined {
-  const address = /^https:\/\/(?:api\.github\.com\/repos|github\.com)\/([^/]+\/[^/]+)\/(issues|pulls?)\/(\d+)\/?(?:#discussion_r(\d+)|#[\w-]*)?$/i
-  const match = address.exec(url)
+  const match = GITHUB_ADDRESS.exec(url)
   if (!match || !sameName(match[1]!, repository)) return undefined
   return { number: Number(match[3]), pr: match[2]!.toLowerCase() !== 'issues', ...match[4] ? { discussion: Number(match[4]) } : {} }
 }

@@ -5,7 +5,7 @@ import { backfillChat, consumerRetry, feishuKind, feishuTriggerId, feishuRef, fe
 import { KV } from '../src/kv.ts'
 import { apply as applyFeishu, pollThreads as pollFeishuThreads } from '../src/sources/feishu.ts'
 import { runFeishu } from '../src/sources/feishu-loops.ts'
-import { commentTrigger, githubAddress, githubChannel, issueTrigger, type GithubComment, type GithubIssue } from '../src/sources/github-trigger.ts'
+import { commentTrigger, githubAddress, githubChannel, githubRepository, issueTrigger, type GithubComment, type GithubIssue } from '../src/sources/github-trigger.ts'
 import { claimPull, observePull, pullEndNotices, pullOf, ticketBranch, type Pull } from '../src/sources/github-pull.ts'
 import { ciCounts, ciFact, ciSummary } from '../src/sources/github-read.ts'
 import { apply as applyGithub, githubKind, pollFailure, pollRound } from '../src/sources/github.ts'
@@ -77,7 +77,7 @@ const refused = (status: number, text: string) => commandError({ stderr: `gh: ${
 function github(h: ReturnType<typeof host>, routes: Record<string, unknown>): string[] {
   const reads: string[] = []
   vi.spyOn(h.commands, 'run').mockImplementation(async (_program, args) => {
-    reads.push(args[1]!.replace(/^repos\/acme\/widgets\//, ''))
+    reads.push(args[1]!.replace(/^repos\/[^/]+\/[^/]+\//, ''))
     const path = reads.at(-1)!.split('?')[0]!
     const list = /\/(comments|reviews|statuses)$/.test(path) ? [] : refused(404, 'Not Found')
     const route = routes[path] ?? (path.endsWith('/check-runs') ? { check_runs: [] } : list)
@@ -351,6 +351,10 @@ describe('github source', () => {
       'https://github.com/acme/widgets/pull/7/files', '']) {
       expect(githubAddress(url, 'acme/widgets')).toBeUndefined()
     }
+    // The repository of a canonical URL, for a Thread's provenance after the setting changed.
+    expect(githubRepository('https://github.com/acme/widgets/pull/7#discussion_r5')).toBe('acme/widgets')
+    expect(githubRepository('https://api.github.com/repos/Acme/Widgets/issues/12')).toBe('Acme/Widgets')
+    expect(githubRepository('https://github.com/acme/widgets/commit/abc')).toBeUndefined()
   })
   it('matches a branch to a ticket by its short name as the last path segment', () => {
     expect(ticketBranch({ execution: execution('fix-title-1a2b3c') }, 'agent/fix-title-1a2b3c')).toBe(true)
@@ -529,6 +533,71 @@ describe('github source', () => {
     thread(15 * day, ['t9'])
     await pollGithubThreads(h)
     expect(bare(reads)).toEqual(['issues/7/comments', 'issues/7/comments'])
+    h.store.close()
+  })
+  it('leaves a subscribed Thread read in another repository unread after the repository setting changed', async () => {
+    const h = host()
+    h.store.tickets.save({ ...openTicket('t1'), follows: [{ thread: 'github:5', own: true }, { thread: 'github:6', own: true }] })
+    const thread = (number: number, meta: Record<string, unknown>) => h.store.threads.save({ key: `github:${number}`,
+      ref: { source: 'github', id: String(number) }, createdAt: '2026-09-01T00:00:00Z', lastAt: new Date().toISOString(),
+      subscriptions: ['t1'], correlated: [], pending: [], meta })
+    thread(5, { number: 5, isPr: true, title: 'Previous repository', url: 'https://github.com/acme/atlas/pull/5',
+      repository: 'acme/atlas', pollError: 'Error: gh: Not Found (HTTP 404)' })
+    thread(6, { number: 6, isPr: true, title: 'Watched repository', url: 'https://github.com/acme/widgets/pull/6',
+      repository: 'acme/widgets' })
+    const reads = github(h, { notifications: [], 'pulls/6': openPull(6) })
+    await expect(pollRound(h)).resolves.toBe(60)
+    // Neither the Thread nor the ticket's PR of the previous repository is read against the watched one.
+    expect(bare(reads).filter(path => /^(issues|pulls)\/5(?:\/|$)/.test(path ?? ''))).toEqual([])
+    expect(bare(reads)).toEqual(expect.arrayContaining(['pulls/6', 'pulls/6/comments']))
+    // Its stale failure is gone, and the Source reports no polling error.
+    expect(h.store.threads.get('github:5')!.meta.pollError).toBeUndefined()
+    expect(h.health.github).toMatchObject({ state: 'ready' })
+    h.store.close()
+  })
+  it('recognizes the previous repository\'s Thread by the URL it was read at, as after an upgrade', async () => {
+    const h = host()
+    h.store.tickets.save(openTicket('t1'))
+    h.store.threads.save({ key: 'github:7', ref: { source: 'github', id: '7' }, createdAt: '2026-09-01T00:00:00Z',
+      lastAt: new Date().toISOString(), subscriptions: ['t1'], correlated: [], pending: [],
+      meta: { number: 7, isPr: true, title: 'Read before the switch', url: 'https://github.com/acme/atlas/pull/7',
+        pollError: 'Error: gh: Not Found (HTTP 404)' } })
+    const reads = github(h, { notifications: [] })
+    await expect(pollRound(h)).resolves.toBe(60)
+    expect(bare(reads)).toEqual(['notifications'])
+    expect(h.store.threads.get('github:7')!.meta).toMatchObject({ repository: 'acme/atlas' })
+    expect(h.store.threads.get('github:7')!.meta).not.toHaveProperty('pollError')
+    expect(h.health.github).toMatchObject({ state: 'ready' })
+    h.store.close()
+  })
+  it('records the repository setting a subscribed Thread was read under, and leaves it unread after the setting changes', async () => {
+    const h = host()
+    const configure = (repository: string) => {
+      h.deployment.repository = repository
+      const settings = h.store.settings()
+      h.store.saveSettings({ ...settings, sources: { ...settings.sources, github: { enabled: true, config: { repository, cli: '/bin/false' } } } })
+    }
+    configure('acme/atlas')
+    h.store.tickets.save(openTicket('t1'))
+    h.store.threads.save({ key: 'github:5', ref: { source: 'github', id: '5' }, createdAt: '2026-09-01T00:00:00Z',
+      lastAt: new Date().toISOString(), subscriptions: ['t1'], correlated: [], pending: [],
+      meta: { number: 5, isPr: false, title: 'Read before the switch' } })
+    const reads = github(h, { notifications: [], 'issues/5/comments': [] })
+    await pollRound(h)
+    expect(bare(reads)).toContain('issues/5/comments')
+    expect(h.store.get('github-repository')).toBe('acme/atlas')
+    // The setting names another repository: the Thread keeps the one it was read under and is not read again, and a pending
+    // retry of the previous repository is dropped instead of being read against the new one.
+    h.store.set('github-retry', { 9: { since: '2026-09-01T00:00:00.000Z', pr: false, attempts: 1, failedAt: new Date().toISOString() } })
+    configure('acme/widgets')
+    reads.length = 0
+    await pollRound(h)
+    expect(bare(reads)).not.toContain('issues/5/comments')
+    expect(bare(reads)).not.toContain('issues/9')
+    expect(h.store.get('github-retry')).toEqual({})
+    expect(h.store.threads.get('github:5')!.meta.repository).toBe('acme/atlas')
+    expect(h.store.get('github-repository')).toBe('acme/widgets')
+    expect(h.health.github).toMatchObject({ state: 'ready' })
     h.store.close()
   })
   it('takes in a review decision without a body and skips a plain review comment without one', async () => {
