@@ -1,11 +1,18 @@
 # Attribution and Source Notice
 
-DSH Superagent Review is an independently maintained modified distribution of the open-source
-`dsh-superagent` project:
+DSH Superagent Review is independently maintained by AIR-DUSTER1 and is a modified
+distribution of the open-source `dsh-superagent` project.
 
+- Current independently maintained repository:
+  https://github.com/AIR-DUSTER1/dsh-superagent-review
 - Upstream project: dsh-superagent
-- Upstream repository: https://github.com/deepseek-ai/dsh-superagent-prototype
+- Official upstream repository:
+  https://github.com/deepseek-ai/dsh-superagent-prototype
 - Upstream license: MIT
+
+All upstream authorship and copyright remain attributed to the original project.
+The AIR-DUSTER1 repository is not the official DeepSeek repository and does not
+imply endorsement by the upstream maintainers.
 
 DSH Superagent Review is not an official DeepSeek product. Copyright and license notices from
 the upstream project and third-party dependencies remain in effect.

@@ -1,15 +1,18 @@
 # DSH Superagent Review
 
 > **Project name:** DSH Superagent Review  
-> **Repository:** `dsh-superagent-review`  
+> **Maintainer:** [AIR-DUSTER1](https://github.com/AIR-DUSTER1)  
+> **Current repository:** [AIR-DUSTER1/dsh-superagent-review](https://github.com/AIR-DUSTER1/dsh-superagent-review)  
 > **Technical package/bundle name:** `dsh-superagent` (kept for DSH compatibility)
 
 DSH Superagent Review 是一个面向受控交付场景的 **dsh-superagent 独立发行版**。它在原项目的需求接收、只读评估、Worker 执行、Git 与 PR 交付能力之上，增加了人工复核模式，并与 [Gatehouse](https://github.com/AIR-DUSTER1/dsh-gatehouse) 审批控制台组成完整闭环。
 
 > **来源声明**  
-> 本项目来源于开源项目 **dsh-superagent**：  
+> 当前项目由 **AIR-DUSTER1** 独立维护：  
+> [https://github.com/AIR-DUSTER1/dsh-superagent-review](https://github.com/AIR-DUSTER1/dsh-superagent-review)  
+> 本项目基于开源项目 **dsh-superagent** 的官方仓库修改：  
 > [https://github.com/deepseek-ai/dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype)  
-> DSH Superagent Review 是独立维护的修改版本，不是 DeepSeek 官方产品。上游 README 中的研究原型声明、MIT License 和第三方依赖许可继续适用。
+> DSH Superagent Review 不是 DeepSeek 官方仓库或官方产品。上游 README 中的研究原型声明、MIT License、原作者版权和第三方依赖许可继续适用。
 
 ## 工作方式
 
