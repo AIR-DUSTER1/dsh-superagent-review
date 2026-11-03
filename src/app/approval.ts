@@ -78,7 +78,7 @@ export const ApprovalDecisionSchema = z.object({
   proposal_id: z.string().min(1),
   decision: z.enum(['approve', 'reject', 'request_info']),
   reviewer: z.string().trim().min(1).max(200),
-  comment: z.string().trim().min(1).max(2000),
+  comment: z.string().trim().max(2000).default(''),
   requirement_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   scope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   schedule_at: z.iso.datetime({ offset: true }).optional(),
