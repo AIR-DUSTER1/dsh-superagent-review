@@ -169,10 +169,20 @@ it('lists an Eval past its deadline, and as dsh-superagent\'s own errors only pa
     'sync:feishu': error('sync failed'), evals: error('unavailable'), launch: { state: 'ready' as const, detail: '' } }
   const found = problems(host, health)
   expect(found).toContainEqual({ kind: 'eval-overdue', thread: expect.objectContaining({ key: 'github:1', stage: 'evaluating' }) })
-  // Effects are dsh-superagent's own; a Source shows its parts and its Policy sync, and the Evals are listed one by one.
-  expect(found.filter(item => item.kind === 'runtime-error')).toEqual([{ kind: 'runtime-error', name: 'relay', detail: 'relay failing' },
-    { kind: 'runtime-error', name: 'reply', detail: 'reply failing' }])
+  // Effects are dsh-superagent's own, while failed replies and Evals have their own problem rows.
+  expect(found.filter(item => item.kind === 'runtime-error')).toEqual([{ kind: 'runtime-error', name: 'relay', detail: 'relay failing' }])
   expect(found.filter(item => item.kind === 'source-error').map(item => item.source.health.name)).toEqual(['feishu', 'history'])
+})
+
+it('shows a failed reply once as an outgoing problem rather than also as a runtime error', () => {
+  const message = { id: 'failed-reply', channel: feishuChannel('oc_1', 'om_1'), text: '收到了', kind: 'reply' as const }
+  store.receipts.add(message)
+  store.db.prepare(`INSERT INTO effect (kind, key, value, seq, generation, attempts, error, due, since)
+    VALUES ('reply', ?, '{}', 1, 0, 4, 'Something went wrong (2200)', ?, ?)`).run(message.id, Date.now(), at)
+  const found = problems(views(), { reply: { state: 'error', detail: 'Something went wrong (2200)' } })
+  expect(found.filter(item => item.kind === 'outgoing')).toEqual([{ kind: 'outgoing', outgoing: expect.objectContaining({
+    id: message.id, attempts: 4, error: 'Something went wrong (2200)' }) }])
+  expect(found.filter(item => item.kind === 'runtime-error' && item.name === 'reply')).toEqual([])
 })
 
 it('says no Source runs when every Source is off, and states a Source missing or off', () => {

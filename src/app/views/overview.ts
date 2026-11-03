@@ -52,9 +52,9 @@ export function overview(host: ViewHost, health: HealthMap, policyVersionValue: 
     ...(anyoneAllowed(settings) ? [] : [{ kind: 'no-allowed' as const }]),
     ...running.flatMap(source => source.health.filter(item => item.state === 'error').map(item => ({ kind: 'source-error' as const, source: { id: source.id, title: source.title, health: item } }))),
     ...(settings.paused ? [{ kind: 'executor-paused' as const }] : []),
-    // Unavailable Evals behind the `evals` health entry are listed individually as `eval-unavailable` below.
+    // Unavailable Evals and failed replies have their own problem rows below, so do not duplicate them as runtime errors.
     ...Object.entries(health).filter(([name, item]) => item.state === 'error' && !sourceParts.has(name) && !name.startsWith('sync:')
-      && name !== 'evals')
+      && name !== 'evals' && name !== 'reply')
       .map(([name, item]) => ({ kind: 'runtime-error' as const, name, detail: item.detail })),
     ...evaluating.filter(thread => thread.evaluating!.deadline < now)
       .map(thread => ({ kind: 'eval-overdue' as const, thread: threadSummary(view, thread) })),

@@ -4,9 +4,9 @@ import { key, type ChannelRef, type Trigger } from '../core/index.ts'
 import type { FeishuMessage, FeishuRef } from './feishu-read.ts'
 
 export const SOURCE = 'feishu'
-/** Constructs a Feishu reply channel address; records `direct` explicitly because both group and direct chat IDs start with `oc_`. */
-export const feishuChannel = (chatId: string, messageId: string, direct = false): ChannelRef =>
-  ({ source: SOURCE, thread: `feishu:${chatId}`, address: { chatId, messageId, ...direct ? { direct: 'true' } : {} } })
+/** Constructs a Feishu reply channel address; records `direct` and whether the message already belongs to a thread. */
+export const feishuChannel = (chatId: string, messageId: string, direct = false, threaded = false): ChannelRef =>
+  ({ source: SOURCE, thread: `feishu:${chatId}`, address: { chatId, messageId, threaded: threaded ? 'true' : 'false', ...direct ? { direct: 'true' } : {} } })
 /** A message as the live event consumer prints it; the history and topic-page paths normalize what they read into this shape. */
 const EventSchema = z.object({ message_id: z.string(), chat_id: z.string(), chat_type: z.enum(['p2p', 'group']),
   sender_id: z.string(), sender_type: z.enum(['user', 'bot']), content: z.string(), create_time: z.string(),
@@ -38,7 +38,8 @@ export function feishuTrigger(input: unknown, botId: string, botAppId: string): 
     actor: { source: SOURCE, id: event.sender_id }, human: event.sender_type === 'user',
     ...(direct ? { addressed: 'direct' as const } : mentioned ? { addressed: 'mention' as const } : {}),
     at: feishuTime(event.create_time), text: withMentionNames(event.content, event.mentions),
-    channel: feishuChannel(event.chat_id, event.message_id, direct), ...(event.message_app_link ? { url: event.message_app_link } : {}),
+    channel: feishuChannel(event.chat_id, event.message_id, direct, !!(event.thread_id || event.root_id || event.parent_id)),
+    ...(event.message_app_link ? { url: event.message_app_link } : {}),
     meta: { chatId: event.chat_id, messageId: event.message_id, direct, mentioned, ...(event.root_id ? { rootId: event.root_id } : {}),
       ...(event.parent_id ? { parentId: event.parent_id } : {}), ...(event.thread_id ? { threadId: event.thread_id } : {}) } }
 }
