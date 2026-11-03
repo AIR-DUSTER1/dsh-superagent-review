@@ -84,6 +84,7 @@ export const ApprovalDecisionSchema = z.object({
   decision: z.enum(['approve', 'reject', 'request_info']),
   reviewer: z.string().trim().min(1).max(200),
   comment: z.string().trim().max(2000).default(''),
+  grant_id: z.string().min(1).optional(),
   requirement_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   scope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   schedule_at: z.iso.datetime({ offset: true }).optional(),
@@ -256,11 +257,12 @@ export class ApprovalBridge {
     let status: ApprovalStatus
     if (body.decision === 'approve') {
       if (!body.schedule_at || !body.expires_at) throw new ApprovalError('SCHEDULE_REQUIRED', 400, 'Approval requires schedule_at and expires_at')
+      if (!body.grant_id) throw new ApprovalError('GRANT_ID_REQUIRED', 400, 'Approval requires the canonical grant_id')
       const schedule = new Date(body.schedule_at).toISOString()
       const expires = new Date(body.expires_at).toISOString()
       if (Date.parse(expires) <= Date.parse(schedule)) throw new ApprovalError('INVALID_GRANT_EXPIRY', 400, 'expires_at must be after schedule_at')
       status = 'approved'
-      grant = { id: `grant_${randomUUID()}`, reviewer: body.reviewer, requirement_hash: current.requirement_hash,
+      grant = { id: body.grant_id, reviewer: body.reviewer, requirement_hash: current.requirement_hash,
         scope_hash: current.scope_hash, approved_at: at, schedule_at: schedule, expires_at: expires, consumed_at: null, status: 'active' }
     } else status = body.decision === 'reject' ? 'rejected' : 'info_requested'
     const proposal: ApprovalProposal = { ...current, status, updated_at: at,
