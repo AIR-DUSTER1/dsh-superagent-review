@@ -17,9 +17,10 @@ function harness() {
   const store = new Store(join(dir, 'state', 'orchestrator.sqlite'))
   const requests: Candidate[] = []
   const launches: string[] = []
+  const delivered: OutboundMessage[] = []
   const executor: Executor = { start: (ticket) => { launches.push(ticket.id) }, deliver: vi.fn(), stop: vi.fn() }
   const outbox: { send(message: OutboundMessage): void; status(): undefined; withdraw(): void } = {
-    send: vi.fn(), status: () => undefined, withdraw: vi.fn(),
+    send: message => { delivered.push(message) }, status: () => undefined, withdraw: vi.fn(),
   }
   let clock = Date.parse('2026-11-02T08:00:00.000Z')
   let bridge: ApprovalBridge
@@ -32,13 +33,14 @@ function harness() {
     reviewProposal: draft => bridge.createProposal(draft), emit: event => bridge.onDomainEvent(event),
     now: () => new Date(clock).toISOString(),
   })
-  bridge = new ApprovalBridge({ store, engine, now: () => new Date(clock).toISOString(),
+  bridge = new ApprovalBridge({ store, engine, outbox: { send: outbox.send }, now: () => new Date(clock).toISOString(),
     console: { url: 'http://console.test', eventSecret: 'event-secret', sharedSecret: 'shared-secret' },
     fetcher: async () => new Response(null, { status: 200 }) })
   const trigger: Trigger = { id: 'trigger-1', source: 'feishu', threads: [{ source: 'feishu', id: 'chat:1' }],
     actor: { source: 'feishu', id: 'ou_chen' }, human: true, addressed: 'mention', at: new Date(clock).toISOString(),
-    text: '请新增 HSE 导出功能', url: 'https://example.test/message/1', meta: {} }
-  return { store, engine, bridge, requests, launches, trigger,
+    text: '请新增 HSE 导出功能', url: 'https://example.test/message/1',
+    channel: { source: 'feishu', thread: 'chat:1', address: { message_id: 'om_1' } }, meta: {} }
+  return { store, engine, bridge, requests, launches, delivered, trigger,
     tick: (ms: number) => { clock += ms } }
 }
 
@@ -73,6 +75,8 @@ describe('approval bridge', () => {
     expect(h.store.tickets.list()).toEqual([])
     expect(h.launches).toEqual([])
     expect(h.store.keys(KV.approval.event.prefix)).toHaveLength(1)
+    expect(h.delivered).toContainEqual(expect.objectContaining({ id: key('ack', h.trigger.id), text: '已进入复核',
+      kind: 'acknowledgement', channel: h.trigger.channel }))
     h.store.close()
   })
 
@@ -87,6 +91,10 @@ describe('approval bridge', () => {
       expires_at: new Date(Date.parse('2026-11-02T09:00:00.000Z')).toISOString(), trace_id: 'trace-1', idempotency_key: 'decision-1' })
     expect(approved.proposal.status).toBe('approved')
     expect(h.store.tickets.list()).toEqual([])
+    const scheduleNotice = h.delivered.find(message => message.id === key('approval-schedule', proposal.id))
+    expect(scheduleNotice).toMatchObject({ kind: 'reply', channel: h.trigger.channel })
+    expect(scheduleNotice?.text).toContain('开发排期已确认')
+    expect(scheduleNotice?.text).toContain('这是开发开始时间，不是完成时间。')
 
     expect(() => h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
       requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',

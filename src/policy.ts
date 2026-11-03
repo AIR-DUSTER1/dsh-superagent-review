@@ -30,7 +30,7 @@ export function directionAllowed(value: unknown): value is AdmissionDirection {
 export interface Assessment {
   decision: 'accept' | 'ignore' | 'unavailable'; rule_assessments: RuleAssessment[]; direction: unknown
   title: string; scope: string; reason: string; intent_evidence?: string | null; acknowledgement?: string | null; worktree_name?: string
-  review?: { summary?: string; impact_files?: string[]; test_plan?: string[]; estimated_cost?: string; risk?: 'low' | 'medium' | 'high' | 'critical'; risk_reason?: string }
+  review?: { summary?: string; requester_explanation?: string; impact_files?: string[]; test_plan?: string[]; estimated_cost?: string; risk?: 'low' | 'medium' | 'high' | 'critical'; risk_reason?: string }
 }
 /**
  * Validate an assessment against enabled rules and convert it into an engine `AssessmentOutcome`.

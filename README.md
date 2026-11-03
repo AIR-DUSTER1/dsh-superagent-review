@@ -33,7 +33,8 @@ execution.started / execution.finished / execution.failed
 核心不变量：
 
 - `review` 模式下，评估通过只生成 Proposal，不创建 Ticket、worktree 或 PR。
-- 人工批准前不会产生代码执行副作用。
+- 人工批准前不会运行命令、修改文件、清理订阅或产生其他代码执行副作用。
+- 收到需求后先向发起人解释浅显原因并告知已记录、已移交开发；批准后再通知开发开始时间。
 - ApprovalGrant 绑定 `requirement_hash`、`scope_hash`、`scheduled_at` 和过期时间。
 - Grant 在执行前原子消费，重复请求使用同一 `execution_id`，不会重复创建 Worker。
 - DSH Superagent Review 不自行判断人工审批结果；Gatehouse 不直接操作 Git 或 PR。
@@ -47,6 +48,7 @@ execution.started / execution.finished / execution.failed
 - 执行 API：`POST /orchestrator/api/executions`。
 - 执行前重新校验需求哈希、范围哈希、排期和过期时间。
 - `Engine.executeProposal`：只在 Grant 验证通过后创建 Ticket。
+- 审批排期通知会说明该时间是开发开始时间，不是完成时间，并提示仍需测试和部署。
 - Worker `failed` / `blocked` 报告回传 `execution.failed`。
 - gatehouse 风格的 Review 模式配置入口和双语提示。
 
