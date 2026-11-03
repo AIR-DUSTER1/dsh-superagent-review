@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Engine, key, type Candidate, type Executor, type OutboundMessage, type Policy, type Trigger } from '../src/core/index.ts'
-import { ApprovalBridge, ApprovalError } from '../src/app/approval.ts'
+import { ApprovalBridge, ApprovalDecisionSchema, ApprovalError } from '../src/app/approval.ts'
 import { Store } from '../src/app/store.ts'
 import { KV } from '../src/kv.ts'
 
@@ -52,6 +52,18 @@ function accept(h: ReturnType<typeof harness>) {
 }
 
 describe('approval bridge', () => {
+  it('accepts a decision without a review comment', () => {
+    const hash = `sha256:${'a'.repeat(64)}`
+    const decision = ApprovalDecisionSchema.parse({
+      proposal_id: 'proposal-1', decision: 'approve', reviewer: '演示复核人',
+      requirement_hash: hash, scope_hash: hash,
+      schedule_at: '2026-11-02T08:05:00.000Z', expires_at: '2026-11-02T09:00:00.000Z',
+      trace_id: 'trace-1', idempotency_key: 'decision-1',
+    })
+    expect(decision.comment).toBe('')
+    expect(ApprovalDecisionSchema.safeParse({ ...decision, comment: '   ' }).success).toBe(true)
+  })
+
   it('turns review-mode acceptance into a Proposal without creating a Ticket', () => {
     const h = harness()
     const decision = accept(h)
