@@ -9,6 +9,7 @@ import type { SourceStatusView } from './views/sources.ts'
 import type { DecisionListView, SearchView, ThreadDetailView, ThreadListView } from './views/threads.ts'
 import type { TicketListView } from './views/tickets.ts'
 import type { ApprovalProposal } from './approval.ts'
+import type { RepositoryDescriptionSuggestion, RepositoryDiscovery } from './workspace-service.ts'
 
 export const TICKET_FILTERS = ['open', 'person', 'working', 'idle', 'ended'] as const
 export const THREAD_FILTERS = ['subscribed', 'evaluating', 'recent', 'all'] as const
@@ -50,6 +51,11 @@ export interface Api {
   'POST proposals/:id/reschedule': { body: unknown; response: { proposal: ApprovalProposal; replayed: boolean } }
   'POST proposals/:id/withdraw': { body: unknown; response: { proposal: ApprovalProposal; replayed: boolean } }
   'POST executions': { body: unknown; response: { execution_id: string; ticket_id: string; replayed: boolean } }
+  'POST workspaces/sync': { body: unknown; response: { applied: number; disabled: number; config_version: number; config_hash: string; replayed: boolean } }
+  'POST workspaces/validate': { body: unknown; response: RepositoryDiscovery }
+  'POST workspaces/describe': { body: unknown; response: RepositoryDescriptionSuggestion }
+  'GET workspaces/health': { response: { config_version: number | null; config_hash: string | null; sources: Array<Record<string, unknown>> } }
+  'POST workspaces/reassign-proposal': { body: unknown; response: ApprovalProposal }
 }
 type Path<K> = K extends `${string} ${infer P}` ? P : never
 type Params<P> = P extends `${string}:${infer Name}/${infer Rest}` ? Record<Name, string> & Params<Rest>

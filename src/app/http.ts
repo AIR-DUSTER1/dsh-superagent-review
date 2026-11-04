@@ -13,6 +13,7 @@ import { SettingsConflict, type Settings } from './settings.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
 import { UserError, type EngineForPeople, type Ticket } from '../core/index.ts'
 import { ApprovalError, type ApprovalBridge } from './approval.ts'
+import type { WorkspaceService } from './workspace-service.ts'
 import type { Deployment, Machine } from '../deployment.ts'
 import type { DshExecutor } from '../executor/dsh.ts'
 import type { Health } from '../sources/host.ts'
@@ -39,6 +40,7 @@ export interface HttpHost {
   readonly settings: Pick<Settings, 'view' | 'save' | 'pause' | 'sync' | 'refreshLabels'>
   readonly engine: EngineForPeople
   readonly approval?: ApprovalBridge
+  readonly workspaceService: Pick<WorkspaceService, 'sync' | 'discover' | 'describe' | 'health'>
   readonly executor: Pick<DshExecutor, 'activeCount'>
   readonly health: Record<string, Health>
   readonly machine: Machine
@@ -167,6 +169,11 @@ function routes(runtime: HttpHost): Routes {
     'POST proposals/:id/reschedule': async ({ params, body }) => approval().reschedule(params.id, await body(1_048_576)),
     'POST proposals/:id/withdraw': async ({ params, body }) => approval().withdraw(params.id, await body(1_048_576)),
     'POST executions': async ({ body }) => approval().execute(await body(1_048_576)),
+    'POST workspaces/sync': async ({ body }) => runtime.workspaceService.sync(await body(1_048_576)),
+    'POST workspaces/validate': async ({ body }) => runtime.workspaceService.discover(await body()),
+    'POST workspaces/describe': async ({ body }) => runtime.workspaceService.describe(await body()),
+    'GET workspaces/health': () => runtime.workspaceService.health(),
+    'POST workspaces/reassign-proposal': async ({ body }) => approval().reassign(await body()),
     'GET overview': () => overview(views(runtime), runtime.health, policyVersion(store.settings()),
       executorLoad(store, runtime.executor.activeCount()), runtime.setupProblem ?? runtime.feishuProblem),
     'GET search': ({ query }) => search(views(runtime), query.q ?? '', runtime.sourceLinks),
@@ -253,6 +260,7 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
         const route = match(table, req.method ?? 'GET', path.split('/'))
         if (!route) throw new RouteError(404, 'Unknown operation')
         const external = path === 'executions' || path === 'proposals' || path.startsWith('proposals/')
+          || path.startsWith('workspaces/')
         const trustedPanel = sameOrigin(req, ctx.webServer.port)
         let cached: { value: unknown } | undefined
         const body = async (maxBytes = 128 * 1024) => {

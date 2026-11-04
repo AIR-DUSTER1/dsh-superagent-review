@@ -14,10 +14,14 @@ export function sourceHealth(sources: SourceRegistry, instance: SourceInstance, 
   const kind = sources.kind(instance.kind)
   const starting: Health = { state: 'starting', detail: '' }
   const parts = (kind?.health ?? []).map(name => {
-    const entry = health[name]
+    const entry = health[instance.id === instance.kind ? name : `${instance.id}:${name}`]
     return { name, ...(!entry || (instance.enabled && entry.code === 'sourceOff') ? starting : entry) }
   })
-  return { id: instance.id, title: kind?.title ?? { zh: instance.id, en: instance.id }, health: parts }
+  const title = kind?.title ?? { zh: instance.id, en: instance.id }
+  return { id: instance.id, title: instance.workspace
+    ? { zh: `${instance.workspace.workspace_name} · ${instance.workspace.repository_key}`,
+        en: `${instance.workspace.workspace_name} · ${instance.workspace.repository_key}` }
+    : title, health: parts }
 }
 export interface SetupState {
   /** Resolved deployment facts; undefined while waiting for initial setup. */
@@ -27,13 +31,14 @@ export interface SetupState {
   /** Feishu bot check failure that pauses only the Feishu Source. */
   feishuProblem?: SetupProblem | undefined
 }
-export const problemOf = (id: string, setup: SetupState) => [setup.problem, setup.feishuProblem].find(problem => problem?.place === id)
+export const problemOf = (id: string, setup: SetupState, kind = id) => [setup.problem, setup.feishuProblem]
+  .find(problem => problem?.place === kind || problem?.place === id)
 /** Source lifecycle state in priority order: missing kind, disabled, setup/part error, blocked on global setup, starting, paused, or ready. */
 export type SourceState = 'missing' | 'off' | 'error' | 'setup' | 'starting' | 'paused' | 'ready'
 function sourceState(instance: SourceInstance & { installed: boolean }, parts: { state: string }[], setup: SetupState): SourceState {
   if (!instance.installed) return 'missing'
   if (!instance.enabled) return 'off'
-  if (problemOf(instance.id, setup) || parts.some(part => part.state === 'error')) return 'error'
+  if (problemOf(instance.id, setup, instance.kind) || parts.some(part => part.state === 'error')) return 'error'
   if (setup.problem) return 'setup'
   if (parts.some(part => part.state === 'starting')) return 'starting'
   return parts.some(part => part.state === 'paused') ? 'paused' : 'ready'
@@ -49,7 +54,7 @@ export function sourcesStatus(host: ViewHost, health: HealthMap, setup: SetupSta
   const dropped = droppedReplies(host)
   return sources.instances().map(instance => {
     const { health: parts, ...named } = sourceHealth(sources, instance, health)
-    const problem = problemOf(instance.id, setup)
+    const problem = problemOf(instance.id, setup, instance.kind)
     return { ...named, installed: instance.installed, enabled: instance.enabled, state: sourceState(instance, parts, setup), health: parts,
       ...problem ? { problem } : {}, stats: stats[instance.id] ?? { received: 0, filtered: 0, lastAt: '' }, filtered: filtered(instance.id),
       dropped: dropped.filter(item => item.channel.source === instance.id) }

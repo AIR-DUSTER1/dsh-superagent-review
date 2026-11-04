@@ -62,4 +62,9 @@ export const KV = {
   approval: { proposal: family<ApprovalProposal, [id: string]>('approval-proposal:'),
     event: family<{ event: ApprovalConsoleEvent; attempts: number; nextAt: string; error?: string }, [id: string]>('approval-event:'),
     ticket: family<string, [ticketId: string]>('approval-ticket:'), nonce: family<string, [nonce: string]>('approval-nonce:') },
+  /** Gatehouse workspace synchronization: idempotency records and the last applied configuration. */
+  workspace: {
+    sync: family<{ config_version: number; config_hash: string; applied: number; disabled: number; at: string }, [key: string]>('workspace-sync:'),
+    current: record<{ config_version: number; config_hash: string; applied_at: string }>('workspace-current'),
+  },
 }

@@ -112,11 +112,13 @@ export const inject = ['orchestrator']
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.orchestrator.sources.register(githubKind), 'github: source kind')
   ctx.effect(() => {
-    const source = sourceContext(ctx.orchestrator, githubKind)
     const controller = new AbortController()
-    // Unhandled rejections terminate the DSH process, so a failure escaping the polling loop is reported as source health instead.
-    const running = watch(source, controller.signal)
-      .catch((error: unknown) => { source.report('github', { state: 'error', detail: String(error) }) })
+    const running = Promise.all(ctx.orchestrator.sources.instancesForKind(SOURCE).map(instance => {
+      const source = sourceContext(ctx.orchestrator, githubKind, instance.id)
+      // Unhandled rejections terminate the DSH process, so a failure escaping one polling loop is reported on that instance.
+      return watch(source, controller.signal)
+        .catch((error: unknown) => { source.report('github', { state: 'error', detail: String(error) }) })
+    }))
     return async () => { controller.abort(); await running }
   })
 }

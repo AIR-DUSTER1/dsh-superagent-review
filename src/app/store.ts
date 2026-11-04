@@ -21,6 +21,7 @@ export type Dropped = Receipt & { dropped: { at: string; reason: DropReason } }
 /** Saved settings snapshot with the policy version and ticket notifications it produced (`internal` saves have no origin). */
 export interface SettingsVersion {
   revision: number; savedAt: string; source: SettingsOrigin | 'internal'; block?: SettingsSave
+  blocks?: SettingsSave[]
   policyVersion: string; policyChanged: boolean; notified: string[]; settings: Settings
 }
 /**
@@ -192,6 +193,7 @@ export class Store implements Repositories {
     return this.atomic(() => {
       this.settingsVersions.save(revision => ({ ...record, revision, savedAt: new Date().toISOString(), settings }))
       if (record.block) this.set(KV.settings.block(record.block), this.blockRevision(record.block) + 1)
+      for (const block of record.blocks ?? []) this.set(KV.settings.block(block), this.blockRevision(block) + 1)
       return settings
     })
   }

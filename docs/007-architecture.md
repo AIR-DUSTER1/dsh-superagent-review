@@ -404,8 +404,11 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/marks.ts` | The marks of the states the views classify: a Ticket's or a Thread's stage, a Source's state and a Decision's outcome, each as a dot, an icon, a tone and a label |
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
+| `src/app/workspace-service.ts` | Signed Gatehouse workspace synchronization, provider discovery, credential-reference resolution and model-generated repository descriptions |
+| `src/app/workspace-routing.ts` | Workspace/repository bindings, native and explicit selection, deterministic description scoring, and workspace binding hashes |
+| `src/sources/generic.ts` | Execution-only GitLab/Gitea/bare-Git Source instances that do not poll native events |
 
-`src/sources/github.ts` and `src/sources/feishu.ts` are also the entries of the two Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the three plugins, with Feishu disabled.
+`src/sources/github.ts`, `src/sources/feishu.ts` and `src/sources/generic.ts` are also Source plugin entries, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./feishu-watch` and `./generic-watch`. The bundle's `cordis.patch.yml` inserts the four plugins, with Feishu disabled.
 
 ## Tests
 
@@ -454,6 +457,8 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/locales.spec.ts`, `tests/styles.spec.ts` | The copy in both languages, the stylesheet |
 | `tests/class-docs.spec.ts` | Every class in `src` has a JSDoc block before it |
 | `tests/docs.spec.ts` | Numbered documents link only to earlier ones, every local link resolves, no document has merge conflict markers, and this document's tables list every module and every test |
+| `tests/workspace-service.spec.ts` | Gatehouse workspace synchronization, idempotency, config-hash verification, repository discovery and model description generation |
+| `tests/workspace-routing.spec.ts` | Native/explicit/semantic routing, ambiguity fallback, instance-namespaced triggers, threads and state |
 
 `tests/fixtures/` holds what several tests share: `host.ts`, a simulated DeepSeek Harness host; `panel-server.ts` and `panel.tsx`, the fake management API and the panel around a page; `deployment.ts`, a resolved deployment; `git.ts`, the environment of every git the tests start, which names no repository; and `async.ts`.
 

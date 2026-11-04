@@ -394,6 +394,16 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'POST proposals/:id/reschedule': { body: true, answer: () => refuse(404, 'Proposal not found') },
   'POST proposals/:id/withdraw': { body: true, answer: () => refuse(404, 'Proposal not found') },
   'POST executions': { body: true, answer: () => refuse(404, 'Proposal not found') },
+  'POST workspaces/sync': { body: true, answer: () => ({ applied: 0, disabled: 0, config_version: 1,
+    config_hash: `sha256:${'0'.repeat(64)}`, replayed: false }) },
+  'POST workspaces/validate': { body: true, answer: () => ({ provider: 'github', repository_key: 'owner/repo',
+    web_url: 'https://github.com/owner/repo', default_branch: 'main', language: 'TypeScript', topics: [], readme_excerpt: '',
+    source_fingerprint: `sha256:${'0'.repeat(64)}`, permissions: { read: true, push: true, change_requests: true } }) },
+  'POST workspaces/describe': { body: true, answer: () => ({ short_description: '该仓库用于自动化面板测试中的仓库描述生成流程。',
+    capabilities: ['测试'], routing_keywords: ['测试', '仓库', '面板'], exclusions: [], confidence: 0.9,
+    source_fingerprint: `sha256:${'0'.repeat(64)}`, generated_at: '2026-11-02T00:00:00.000Z', model: 'test/model' }) },
+  'GET workspaces/health': { answer: () => ({ config_version: null, config_hash: null, sources: [] }) },
+  'POST workspaces/reassign-proposal': { body: true, answer: () => refuse(404, 'Proposal not found') },
   'POST prompts/preview': { body: true, answer: ({ body }) => {
     const skills = [...server.setup.accounts?.feishu ? ['feishu'] : [], 'github', ...Object.keys(body.skills)].map(name => [name,
       composeSkill(body, name)])

@@ -97,7 +97,37 @@ export const ExecutorConfigSchema = z.object({
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
   blockedCommands: z.array(CommandNameSchema).default([]),
 }).strict()
-export const SourceInstanceSchema = z.object({ enabled: z.boolean().default(true), config: z.record(z.string(), z.unknown()).default({}) }).strict()
+export const WorkspaceBindingSchema = z.object({
+  workspace_id: z.string().trim().min(1).max(200),
+  workspace_slug: z.string().trim().min(1).max(100),
+  workspace_name: z.string().trim().min(1).max(200),
+  repository_id: z.string().trim().min(1).max(200),
+  provider: z.enum(['github', 'gitlab', 'gitea', 'bitbucket', 'generic']),
+  repository_key: z.string().trim().min(1).max(300),
+  api_base_url: z.string().url().nullable().default(null),
+  web_base_url: z.string().url(),
+  clone_url: z.string().trim().min(1).max(1000),
+  default_branch: z.string().trim().min(1).max(200),
+  credential_ref: z.string().trim().max(300).default(''),
+  custom_ca_ref: z.string().trim().max(500).nullable().default(null),
+  description: z.string().trim().max(1200).default(''),
+  description_version: z.number().int().positive(),
+  description_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  short_description: z.string().trim().max(1200).default(''),
+  capabilities: z.array(z.string().trim().min(1).max(160)).default([]),
+  routing_keywords: z.array(z.string().trim().min(1).max(60)).default([]),
+  exclusions: z.array(z.string().trim().min(1).max(160)).default([]),
+  confidence: z.number().min(0).max(1).default(0),
+}).strict()
+export type WorkspaceBinding = z.infer<typeof WorkspaceBindingSchema>
+export const SourceInstanceSchema = z.object({
+  enabled: z.boolean().default(true),
+  config: z.record(z.string(), z.unknown()).default({}),
+  /** Installed Source kind for named instances; omitted for the legacy default instance whose id equals its kind. */
+  kind: z.string().regex(/^[a-z][a-z0-9-]*$/).optional(),
+  /** Gatehouse workspace and repository binding persisted with the instance. */
+  workspace: WorkspaceBindingSchema.optional(),
+}).strict()
 export const SettingsSchema = z.object({
   paused: z.boolean().default(false),
   sources: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/), SourceInstanceSchema).default({}),

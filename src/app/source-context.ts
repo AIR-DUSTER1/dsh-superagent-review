@@ -1,5 +1,5 @@
-/** Scoped runtime context exposed to each Source kind, isolating Sources from direct Store or Engine access. */
-import type { EngineForSources, ReceiveResult, Trigger } from '../core/index.ts'
+/** Scoped runtime context exposed to each Source instance, isolating Sources from direct Store or Engine access. */
+import type { EngineForSources, ReceiveResult, ThreadRef, Ticket, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SetupProblem } from '../setup.ts'
@@ -14,56 +14,113 @@ export interface SourceContextDeps {
   readonly engine: Pick<EngineForSources, 'bindThread' | 'threadClosed'>
   readonly commands: Commands
   readonly sources: SourceRegistry
-  /** Throws when accessed before initial setup completes. */
   readonly deployment: Deployment
   readonly ready: Promise<void>
   configured(): boolean
-  /** Setup problem whose `place` matches the Source kind receives it on `context.problem`. */
   readonly setupProblem?: SetupProblem | undefined
-  /** Why setup found no Feishu bot even though the Feishu Source names a CLI. */
   readonly feishuProblem?: SetupProblem | undefined
-  /** Hands a Trigger to the Engine and schedules the pass that assesses it. */
   receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
 }
 
-/**
- * Builds the context for one Source kind. Health reports are restricted to entries declared by the kind and
- * bound to the active registration, becoming no-ops once unregistered.
- */
-export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }): SourceContext {
+function githubHost(workspace: { api_base_url: string | null; web_base_url: string; provider: string }): string | undefined {
+  if (workspace.provider !== 'github') return undefined
+  const value = workspace.api_base_url ?? workspace.web_base_url
+  try {
+    const host = new URL(value).hostname.toLowerCase()
+    return host === 'api.github.com' ? 'github.com' : host
+  } catch { return undefined }
+}
+
+interface TicketWorkspace {
+  workspace_id: string
+  repository_id: string
+}
+
+/** Builds one Source instance context. Thread keys, state keys and health are namespaced away from other instances. */
+export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; instanceId?: string; health: readonly string[] }): SourceContext {
   const { store } = deps
-  const health = deps.sources.healthEntries(kind.health)
+  const instanceId = kind.instanceId ?? kind.kind
+  const instance = deps.sources.instance(instanceId)
+  const workspace = instance?.workspace
+  const statePrefix = instanceId === kind.kind ? '' : `${instanceId}:`
+  const health = deps.sources.healthEntriesFor(instanceId, kind.kind, kind.health)
+  const scopeKey = (key: string): string => instanceId !== kind.kind && key.startsWith(`${kind.kind}:`)
+    ? `${instanceId}:${key.slice(kind.kind.length + 1)}` : key
+  const scopeThread = (ref: ThreadRef): ThreadRef => ref.source === kind.kind || ref.source === instanceId
+    ? { ...ref, source: instanceId } : ref
+  const stateName = (name: string): string => instanceId === kind.kind || name.startsWith(statePrefix) ? name : `${statePrefix}${name}`
+  const ticketMatches = (ticket: Ticket): boolean => {
+    const binding = (ticket as Ticket & { workspace?: TicketWorkspace }).workspace
+    if (!workspace) return true
+    return binding
+      ? binding.workspace_id === workspace.workspace_id && binding.repository_id === workspace.repository_id
+      : instanceId === kind.kind
+  }
+  const scopedCommands = workspace?.repository_key
+    ? deps.commands.withRepository(workspace.repository_key).withGitHubHost(githubHost(workspace))
+    : deps.commands
+  const scopedDeployment = workspace?.repository_key ? { ...deps.deployment, repository: workspace.repository_key } : deps.deployment
+  const receive = (trigger: Trigger): ReceiveResult | Promise<ReceiveResult> => {
+    const id = instanceId !== kind.kind && !trigger.id.startsWith(`${instanceId}:`) ? `${instanceId}:${trigger.id}` : trigger.id
+    return deps.receive({
+      ...trigger,
+      id,
+      source: trigger.source === kind.kind || trigger.source === instanceId ? instanceId : trigger.source,
+      threads: trigger.threads.map(scopeThread),
+      actor: trigger.actor.source === kind.kind || trigger.actor.source === instanceId ? { ...trigger.actor, source: instanceId } : trigger.actor,
+      ...trigger.channel ? { channel: { ...trigger.channel,
+        source: trigger.channel.source === kind.kind || trigger.channel.source === instanceId ? instanceId : trigger.channel.source } } : {},
+      meta: { ...trigger.meta, source_instance_id: instanceId,
+        ...(workspace ? { workspace_source: 'instance', workspace_id: workspace.workspace_id, repository_id: workspace.repository_id,
+          workspace: { ...workspace } } : {}) },
+    })
+  }
   return {
-    get deployment() { return deps.deployment },
-    commands: deps.commands,
+    instanceId,
+    kindId: kind.kind,
+    get deployment() { return scopedDeployment },
+    commands: scopedCommands,
     ready: deps.ready,
     configured: () => deps.configured(),
     get problem() { return [deps.feishuProblem, deps.setupProblem].find(problem => problem?.place === kind.kind) },
     config: <C extends Record<string, unknown>>(id: string) => {
-      const instance = deps.sources.instance<C>(id)
-      return instance?.enabled ? instance.config : undefined
+      const target = deps.sources.instance<C>(id === kind.kind || id === instanceId ? instanceId : id)
+      return target?.enabled ? target.config : undefined
     },
-    receive: trigger => deps.receive(trigger),
+    receive,
     atomic: work => store.atomic(work),
     state: {
-      get: name => store.get(name),
-      set: (name, value) => { if (value === undefined) store.delete(name); else store.set(name, value) },
-      keys: prefix => store.keys(prefix),
+      get: name => store.get(stateName(name)) as never,
+      set: (name, value) => { if (value === undefined) store.delete(stateName(name)); else store.set(stateName(name), value) },
+      keys: prefix => store.keys(typeof prefix === 'string' ? `${statePrefix}${prefix}` : `${statePrefix}${prefix.prefix}`)
+        .map(name => instanceId === kind.kind ? name : name.slice(statePrefix.length)) as never,
     },
     threads: {
-      get: key => store.threads.get(key),
-      subscribed: source => store.read.subscribedThreads(source),
-      describe: (key, description) => store.threads.describe(key, description),
-      patch: (key, meta) => { store.threads.patchMeta(key, meta) },
+      get: key => store.threads.get(scopeKey(key)),
+      subscribed: source => store.read.subscribedThreads(source === kind.kind || source === instanceId ? instanceId : source),
+      describe: (key, description) => store.threads.describe(scopeKey(key), description),
+      patch: (key, meta) => { store.threads.patchMeta(scopeKey(key), meta) },
     },
     tickets: {
-      get: id => store.tickets.get(id),
-      open: () => store.tickets.open(),
-      bindThread: (id, thread, own) => { deps.engine.bindThread(id, thread, own) },
-      threadClosed: (thread, outcome, at) => { deps.engine.threadClosed(thread, outcome, at) },
+      get: id => {
+        const ticket = store.tickets.get(id)
+        return ticket && ticketMatches(ticket) ? ticket : undefined
+      },
+      open: () => store.tickets.open().filter(ticketMatches),
+      bindThread: (id, thread, own) => { deps.engine.bindThread(id, scopeThread(thread), own) },
+      threadClosed: (thread, outcome, at) => { deps.engine.threadClosed(scopeThread(thread), outcome, at) },
     },
-    triggers: { get: id => store.triggers.get(id), latest: thread => store.read.threadTriggers(thread, 1)[0] },
-    notify: message => { deps.outbox.send(message) },
+    triggers: {
+      get: id => {
+        const trigger = store.triggers.get(id.startsWith(`${instanceId}:`) ? id : instanceId === kind.kind ? id : `${instanceId}:${id}`)
+        return trigger ?? store.triggers.get(id)
+      },
+      latest: thread => store.read.threadTriggers(scopeKey(thread), 1)[0],
+    },
+    notify: message => {
+      deps.outbox.send({ ...message, channel: { ...message.channel,
+        source: message.channel.source === kind.kind || message.channel.source === instanceId ? instanceId : message.channel.source } })
+    },
     report: (entry, value) => {
       if (!kind.health.includes(entry)) throw new Error(`The ${kind.kind} Source has no health entry ${entry}`)
       health.get(entry)?.set(value)

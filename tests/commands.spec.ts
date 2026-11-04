@@ -29,6 +29,11 @@ describe('account-isolated operations', () => {
       expect(output).not.toContain('GH_TOKEN=')
     } finally { delete process.env.GH_TOKEN }
   })
+  it('selects the named workspace GitHub host without changing the CLI account', async () => {
+    const output = await new Commands(() => deployment, {}, new AbortController().signal).withGitHubHost('git.internal.example')
+      .run(process.execPath, ['-e', 'process.stdout.write(process.env.GH_HOST ?? "")'])
+    expect(output).toBe('git.internal.example')
+  })
   it('refuses Feishu commands when the deployment has no Feishu bot', async () => {
     await expect(new Commands(() => testDeployment({ feishu: undefined }), {}, new AbortController().signal).lark(['im', '+chat-list'])).rejects.toThrow('The Feishu Source has no working bot CLI')
   })

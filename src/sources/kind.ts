@@ -5,6 +5,7 @@ import type { OutboundMessage, ScopeResult, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SourceContext, SourceHost } from './host.ts'
+import type { WorkspaceBinding } from '../policy.ts'
 
 export interface Localized { zh: string; en: string }
 /** `advanced` folds a rarely changed field (such as a polling tunable) behind the card's Advanced section. */
@@ -112,4 +113,10 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   environment?: { variables: readonly VariableSpec[]; values(input: EnvironmentInput<C>): Record<string, string> }
 }
 
-export interface SourceInstance<C extends Record<string, unknown> = Record<string, unknown>> { id: string; kind: string; enabled: boolean; config: C }
+export interface SourceInstance<C extends Record<string, unknown> = Record<string, unknown>> {
+  id: string
+  kind: string
+  enabled: boolean
+  config: C
+  workspace?: WorkspaceBinding
+}

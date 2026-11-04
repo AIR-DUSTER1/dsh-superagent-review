@@ -5,6 +5,7 @@ import { key, type DomainEvent, type EngineForApproval, type Outbox, type Review
 import { KV } from '../kv.ts'
 import type { Store } from './store.ts'
 import { composeScheduleNotification, composeScheduleUpdatedNotification, composeScheduleWithdrawnNotification } from './review-messages.ts'
+import { WorkspaceRouter, workspaceBindingHash, type WorkspaceRouteDecision } from './workspace-routing.ts'
 
 export type ApprovalRisk = 'low' | 'medium' | 'high' | 'critical'
 export type ApprovalStatus = 'pending_review' | 'info_requested' | 'approved' | 'rejected' | 'scheduled' | 'executing' | 'completed' | 'failed' | 'superseded'
@@ -14,6 +15,7 @@ export interface ApprovalGrant {
   reviewer: string
   requirement_hash: string
   scope_hash: string
+  workspace_binding_hash: string
   approved_at: string
   schedule_at: string
   expires_at: string
@@ -39,7 +41,7 @@ export interface ApprovalProposal {
   assessment_revision: number
   title: string
   requester: string
-  source: 'feishu' | 'github'
+  source: 'feishu' | 'github' | 'gitlab' | 'gitea' | 'webhook' | 'manual'
   requirement_text: string
   requirement_hash: string
   summary: string
@@ -51,6 +53,10 @@ export interface ApprovalProposal {
   estimated_cost: string
   risk: ApprovalRisk
   risk_reason: string
+  workspace_id: string | null
+  repository_id: string | null
+  workspace_binding_hash: string | null
+  routing_decision: WorkspaceRouteDecision
   status: ApprovalStatus
   created_at: string
   updated_at: string
@@ -62,10 +68,11 @@ export interface ApprovalProposal {
   schedule_changes?: Array<{ idempotency_key: string; request_hash: string; schedule_at: string; expires_at: string; revision: number; at: string }>
   revocation?: { idempotency_key: string; request_hash: string; reason: string; at: string }
   revocations?: Array<{ idempotency_key: string; request_hash: string; reason: string; at: string }>
+  reassignments?: Array<{ idempotency_key: string; request_hash: string; workspace_id: string; repository_id: string | null; reason: string; at: string }>
 }
 
 export interface ApprovalConsoleEvent {
-  version: '1.0'
+  version: '2.0'
   event_id: string
   event_type: 'proposal.created' | 'proposal.updated' | 'proposal.superseded' | 'execution.started' | 'execution.finished' | 'execution.failed'
   occurred_at: string
@@ -87,6 +94,7 @@ export const ApprovalDecisionSchema = z.object({
   grant_id: z.string().min(1).optional(),
   requirement_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   scope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  workspace_binding_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   schedule_at: z.iso.datetime({ offset: true }).optional(),
   expires_at: z.iso.datetime({ offset: true }).optional(),
   trace_id: z.string().min(1),
@@ -98,6 +106,7 @@ export const ApprovalExecutionSchema = z.object({
   grant_id: z.string().min(1),
   requirement_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   scope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  workspace_binding_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   execution_id: z.string().min(1).max(300),
   trace_id: z.string().min(1),
   idempotency_key: z.string().min(1).max(300),
@@ -108,6 +117,7 @@ export const ApprovalScheduleChangeSchema = z.object({
   grant_id: z.string().min(1),
   requirement_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   scope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  workspace_binding_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   schedule_at: z.iso.datetime({ offset: true }),
   expires_at: z.iso.datetime({ offset: true }),
   trace_id: z.string().min(1),
@@ -119,7 +129,17 @@ export const ApprovalWithdrawalSchema = z.object({
   grant_id: z.string().min(1),
   requirement_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   scope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  workspace_binding_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   reason: z.string().trim().max(1000).default(''),
+  trace_id: z.string().min(1),
+  idempotency_key: z.string().min(1).max(300),
+}).strict()
+
+export const ApprovalReassignSchema = z.object({
+  proposal_id: z.string().min(1),
+  workspace_id: z.string().min(1),
+  repository_id: z.string().min(1).nullable(),
+  reason: z.string().trim().min(1).max(500),
   trace_id: z.string().min(1),
   idempotency_key: z.string().min(1).max(300),
 }).strict()
@@ -150,6 +170,7 @@ export interface ApprovalBridgeHost {
   engine: EngineForApproval
   outbox: Pick<Outbox, 'send'>
   console?: ApprovalConsoleConfig | undefined
+  workspaceRouter: WorkspaceRouter
   now?: () => string
   fetcher?: typeof fetch
 }
@@ -167,7 +188,22 @@ export class ApprovalBridge {
   }
 
   private store(): Store { return this.host.store }
-  private proposal(id: string): ApprovalProposal | undefined { return this.store().get(KV.approval.proposal(id)) }
+  private proposal(id: string): ApprovalProposal | undefined {
+    const stored = this.store().get(KV.approval.proposal(id)) as (ApprovalProposal & Partial<Pick<ApprovalProposal,
+      'workspace_id' | 'repository_id' | 'workspace_binding_hash' | 'routing_decision'>>) | undefined
+    if (!stored) return undefined
+    return {
+      ...stored,
+      workspace_id: stored.workspace_id ?? null,
+      repository_id: stored.repository_id ?? null,
+      workspace_binding_hash: stored.workspace_binding_hash ?? null,
+      routing_decision: stored.routing_decision ?? { id: `routing-legacy-${stored.id}`, workspace_id: null,
+        repository_id: null, source: stored.source, mode: 'manual', confidence: null,
+        reason: 'Legacy Proposal created before workspace routing was enabled', candidates: [], requires_human: true,
+        created_at: stored.created_at },
+      ...(stored.grant ? { grant: { ...stored.grant, workspace_binding_hash: stored.grant.workspace_binding_hash ?? '' } } : {}),
+    }
+  }
 
   list(): ApprovalProposal[] {
     return this.store().keys(KV.approval.proposal.prefix).flatMap(name => {
@@ -192,10 +228,16 @@ export class ApprovalBridge {
     const scope = scopeItems(draft.outcome.scope)
     const risk = review.risk ?? 'medium'
     const summary = review.summary ?? draft.outcome.scope
-    const source = draft.trigger.source === 'feishu' ? 'feishu' : 'github'
     const pluginCaseId = threadKey
     const prior = this.list().filter(item => item.plugin_case_id === pluginCaseId)
     const at = draft.at
+    const previous = prior[0]
+    const routingDecision = this.host.workspaceRouter.route({ trigger: draft.trigger, text: requirements,
+      ...(previous ? { prior: { workspace_id: previous.workspace_id, repository_id: previous.repository_id } } : {}), at })
+    const binding = this.host.workspaceRouter.binding(routingDecision.workspace_id, routingDecision.repository_id)
+    const routedDraft: ReviewProposalDraft = binding ? { ...draft, trigger: { ...draft.trigger,
+      meta: { ...draft.trigger.meta, workspace_id: binding.workspace_id, repository_id: binding.repository_id, workspace: binding } } } : draft
+    const source = routingDecision.source
     const proposal: ApprovalProposal = {
       id: draft.id,
       plugin_case_id: pluginCaseId,
@@ -216,18 +258,23 @@ export class ApprovalBridge {
       estimated_cost: review.estimated_cost ?? 'To be estimated by the executor',
       risk,
       risk_reason: review.risk_reason ?? 'The assessment did not provide a separate risk explanation.',
+      workspace_id: binding?.workspace_id ?? null,
+      repository_id: binding?.repository_id ?? null,
+      workspace_binding_hash: binding ? workspaceBindingHash(binding) : null,
+      routing_decision: routingDecision,
       status: 'pending_review',
       created_at: at,
       updated_at: at,
-      draft,
+      draft: routedDraft,
     }
     this.store().atomic(() => {
       for (const old of prior.filter(item => ['pending_review', 'info_requested'].includes(item.status))) {
         const superseded = { ...old, status: 'superseded' as const, updated_at: at }
         this.store().set(KV.approval.proposal(old.id), superseded)
         this.enqueue({
-          version: '1.0', event_id: `proposal-superseded:${old.id}`, event_type: 'proposal.superseded',
-          occurred_at: at, trace_id: `dsh:${old.id}`, data: { proposal_id: old.id, superseded_by: proposal.id, updated_at: at },
+          version: '2.0', event_id: `proposal-superseded:${old.id}`, event_type: 'proposal.superseded',
+          occurred_at: at, trace_id: `dsh:${old.id}`, data: { proposal_id: old.id, superseded_by: proposal.id, updated_at: at,
+            workspace_id: old.workspace_id, repository_id: old.repository_id },
         })
       }
       this.store().set(KV.approval.proposal(proposal.id), proposal)
@@ -250,6 +297,12 @@ export class ApprovalBridge {
       return { proposal: current, ...(current.grant ? { grant: current.grant } : {}), replayed: true }
     }
     if (current.status !== 'pending_review') throw new ApprovalError('PROPOSAL_NOT_REVIEWABLE', 409, `Proposal is ${current.status}`)
+    if (!current.workspace_id || !current.workspace_binding_hash) {
+      throw new ApprovalError('WORKSPACE_REQUIRED', 409, 'A human reviewer must assign a workspace before deciding this Proposal')
+    }
+    if (current.workspace_binding_hash !== body.workspace_binding_hash) {
+      throw new ApprovalError('WORKSPACE_BINDING_CHANGED', 409, 'The workspace or repository binding changed after the Proposal was created')
+    }
     if (current.requirement_hash !== body.requirement_hash) throw new ApprovalError('REQUIREMENT_CHANGED', 409, 'The requirement changed after the Proposal was created')
     if (current.scope_hash !== body.scope_hash) throw new ApprovalError('SCOPE_CHANGED', 409, 'The execution scope changed after the Proposal was created')
     const at = this.now()
@@ -263,7 +316,8 @@ export class ApprovalBridge {
       if (Date.parse(expires) <= Date.parse(schedule)) throw new ApprovalError('INVALID_GRANT_EXPIRY', 400, 'expires_at must be after schedule_at')
       status = 'approved'
       grant = { id: body.grant_id, reviewer: body.reviewer, requirement_hash: current.requirement_hash,
-        scope_hash: current.scope_hash, approved_at: at, schedule_at: schedule, expires_at: expires, consumed_at: null, status: 'active' }
+        scope_hash: current.scope_hash, workspace_binding_hash: current.workspace_binding_hash,
+        approved_at: at, schedule_at: schedule, expires_at: expires, consumed_at: null, status: 'active' }
     } else status = body.decision === 'reject' ? 'rejected' : 'info_requested'
     const proposal: ApprovalProposal = { ...current, status, updated_at: at,
       decision: { type: body.decision, reviewer: body.reviewer, comment: body.comment,
@@ -277,6 +331,41 @@ export class ApprovalBridge {
       }
     })
     return { proposal, ...(grant ? { grant } : {}), replayed: false }
+  }
+
+  /** Change the target workspace before approval and invalidate any old Grant binding. */
+  reassign(raw: unknown): ApprovalProposal {
+    const body = ApprovalReassignSchema.parse(raw)
+    const current = this.get(body.proposal_id)
+    const requestHash = jsonHash({ proposalId: body.proposal_id, body })
+    const previous = current.reassignments?.find(item => item.idempotency_key === body.idempotency_key)
+    if (previous) {
+      if (previous.request_hash !== requestHash) throw new ApprovalError('IDEMPOTENCY_CONFLICT', 409, 'The idempotency key was reused with different content')
+      return current
+    }
+    if (!['pending_review', 'info_requested', 'approved'].includes(current.status)) {
+      throw new ApprovalError('PROPOSAL_NOT_REASSIGNABLE', 409, 'Only a Proposal before execution can be reassigned')
+    }
+    const binding = this.host.workspaceRouter.binding(body.workspace_id, body.repository_id)
+    if (!binding) throw new ApprovalError('WORKSPACE_NOT_FOUND', 404, 'The selected workspace and repository are not available')
+    const at = this.now()
+    const routing = { id: `routing-manual-${key('workspace-route', current.id, at)}`, workspace_id: binding.workspace_id,
+      repository_id: binding.repository_id, source: current.routing_decision.source, mode: 'manual' as const,
+      confidence: 1, reason: body.reason, candidates: [], requires_human: false, created_at: at }
+    const routedDraft: ReviewProposalDraft = { ...current.draft, trigger: { ...current.draft.trigger,
+      meta: { ...current.draft.trigger.meta, workspace_id: binding.workspace_id, repository_id: binding.repository_id, workspace: binding } } }
+    const reassignment = { idempotency_key: body.idempotency_key, request_hash: requestHash,
+      workspace_id: binding.workspace_id, repository_id: binding.repository_id, reason: body.reason, at }
+    const proposal: ApprovalProposal = { ...current, status: 'pending_review', updated_at: at,
+      workspace_id: binding.workspace_id, repository_id: binding.repository_id,
+      workspace_binding_hash: workspaceBindingHash(binding), routing_decision: routing, draft: routedDraft,
+      ...(current.grant ? { grant: current.grant.status === 'active' ? { ...current.grant, status: 'revoked' as const } : current.grant } : {}),
+      reassignments: [...current.reassignments ?? [], reassignment].slice(-50) }
+    this.store().atomic(() => {
+      this.store().set(KV.approval.proposal(current.id), proposal)
+      this.enqueue(this.proposalEvent(proposal, 'proposal.updated'))
+    })
+    return proposal
   }
 
   /** Move an active Grant to a new schedule and notify the requester. */
@@ -294,6 +383,10 @@ export class ApprovalBridge {
     const grant = current.grant
     if (!grant || grant.id !== body.grant_id) throw new ApprovalError('GRANT_NOT_FOUND', 409, 'The ApprovalGrant does not match this Proposal')
     if (grant.status !== 'active' || grant.consumed_at) throw new ApprovalError('GRANT_CONSUMED', 409, 'The ApprovalGrant is no longer active')
+    if (!current.workspace_binding_hash || grant.workspace_binding_hash !== current.workspace_binding_hash
+      || body.workspace_binding_hash !== current.workspace_binding_hash) {
+      throw new ApprovalError('WORKSPACE_BINDING_CHANGED', 409, 'The workspace or repository binding no longer matches the Grant')
+    }
     if (current.requirement_hash !== body.requirement_hash) throw new ApprovalError('REQUIREMENT_CHANGED', 409, 'The requirement changed after approval')
     if (current.scope_hash !== body.scope_hash) throw new ApprovalError('SCOPE_CHANGED', 409, 'The execution scope changed after approval')
     const at = this.now()
@@ -332,6 +425,10 @@ export class ApprovalBridge {
     const grant = current.grant
     if (!grant || grant.id !== body.grant_id) throw new ApprovalError('GRANT_NOT_FOUND', 409, 'The ApprovalGrant does not match this Proposal')
     if (grant.status !== 'active' || grant.consumed_at) throw new ApprovalError('GRANT_CONSUMED', 409, 'The ApprovalGrant is no longer active')
+    if (!current.workspace_binding_hash || grant.workspace_binding_hash !== current.workspace_binding_hash
+      || body.workspace_binding_hash !== current.workspace_binding_hash) {
+      throw new ApprovalError('WORKSPACE_BINDING_CHANGED', 409, 'The workspace or repository binding no longer matches the Grant')
+    }
     if (current.requirement_hash !== body.requirement_hash) throw new ApprovalError('REQUIREMENT_CHANGED', 409, 'The requirement changed after approval')
     if (current.scope_hash !== body.scope_hash) throw new ApprovalError('SCOPE_CHANGED', 409, 'The execution scope changed after approval')
     const at = this.now()
@@ -363,6 +460,10 @@ export class ApprovalBridge {
     const grant = current.grant
     if (!grant || grant.id !== body.grant_id) throw new ApprovalError('GRANT_NOT_FOUND', 409, 'The ApprovalGrant does not match this Proposal')
     if (grant.status !== 'active' || grant.consumed_at) throw new ApprovalError('GRANT_CONSUMED', 409, 'The ApprovalGrant is no longer active')
+    if (!current.workspace_binding_hash || grant.workspace_binding_hash !== current.workspace_binding_hash
+      || body.workspace_binding_hash !== current.workspace_binding_hash) {
+      throw new ApprovalError('WORKSPACE_BINDING_CHANGED', 409, 'The workspace or repository binding no longer matches the Grant')
+    }
     if (current.requirement_hash !== body.requirement_hash) throw new ApprovalError('REQUIREMENT_CHANGED', 409, 'The requirement no longer matches the Grant')
     if (current.scope_hash !== body.scope_hash) throw new ApprovalError('SCOPE_CHANGED', 409, 'The scope no longer matches the Grant')
     const at = this.now()
@@ -493,17 +594,25 @@ export class ApprovalBridge {
   private proposalEvent(proposal: ApprovalProposal, type: 'proposal.created' | 'proposal.updated'): ApprovalConsoleEvent {
     const caseId = `case_${sha256(proposal.plugin_case_id).slice(7, 23)}`
     return {
-      version: '1.0', event_id: `${type}:${proposal.id}`, event_type: type, occurred_at: proposal.updated_at,
+      version: '2.0', event_id: `${type}:${proposal.id}`, event_type: type, occurred_at: proposal.updated_at,
       trace_id: `dsh:${proposal.id}`,
       data: {
+        workspace_id: proposal.workspace_id,
+        repository_id: proposal.repository_id,
+        workspace_binding_hash: proposal.workspace_binding_hash,
+        routing_decision: proposal.routing_decision,
         case: { id: caseId, plugin_case_id: proposal.plugin_case_id, source: proposal.source, requester: proposal.requester,
           title: proposal.title, requirement_text: proposal.requirement_text, requirement_hash: proposal.requirement_hash,
           status: proposal.status, risk_level: proposal.risk, source_context: `dsh-superagent / ${proposal.thread_key}`,
-          message_url: proposal.draft.trigger.url ?? null, created_at: proposal.created_at, updated_at: proposal.updated_at },
+          message_url: proposal.draft.trigger.url ?? null, workspace_id: proposal.workspace_id,
+          repository_id: proposal.repository_id, routing_decision_id: proposal.routing_decision.id,
+          created_at: proposal.created_at, updated_at: proposal.updated_at },
         proposal: { id: proposal.id, review_case_id: caseId, assessment_revision: proposal.assessment_revision,
           summary: proposal.summary, scope: proposal.scope, scope_hash: proposal.scope_hash, rule_hits: proposal.rule_hits,
           impact_files: proposal.impact_files, test_plan: proposal.test_plan, estimated_cost: proposal.estimated_cost,
           risk: proposal.risk, risk_reason: proposal.risk_reason, status: proposal.status,
+          workspace_id: proposal.workspace_id, repository_id: proposal.repository_id,
+          workspace_binding_hash: proposal.workspace_binding_hash,
           created_at: proposal.created_at, updated_at: proposal.updated_at },
       },
     }
@@ -511,9 +620,11 @@ export class ApprovalBridge {
 
   private executionEvent(proposal: ApprovalProposal, type: 'execution.started' | 'execution.finished' | 'execution.failed', at: string): ApprovalConsoleEvent {
     return {
-      version: '1.0', event_id: `${type}:${proposal.execution!.id}${type === 'execution.failed' ? `:${at}` : ''}`, event_type: type, occurred_at: at,
+      version: '2.0', event_id: `${type}:${proposal.execution!.id}${type === 'execution.failed' ? `:${at}` : ''}`, event_type: type, occurred_at: at,
       trace_id: `dsh:${proposal.id}`,
       data: { proposal_id: proposal.id, execution_id: proposal.execution!.id, pr_url: null,
+        workspace_id: proposal.workspace_id, repository_id: proposal.repository_id,
+        workspace_binding_hash: proposal.workspace_binding_hash,
         ...(proposal.execution!.error ? { error: proposal.execution!.error } : {}) },
     }
   }

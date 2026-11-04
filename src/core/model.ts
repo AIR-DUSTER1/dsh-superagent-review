@@ -279,6 +279,15 @@ export interface Ticket {
   title: string
   decisionId: string
   mandate: Mandate
+  /** Frozen workspace/repository binding inherited from the origin trigger; absent only for legacy tickets. */
+  workspace?: {
+    workspace_id: string
+    repository_id: string
+    provider: string
+    repository_key: string
+    description_hash: string
+    description_version: number
+  }
   /** The Channels of the messages it was accepted from, which its replies go to. */
   channels: ChannelRef[]
   /** When, by whom, and how the ticket ended, with a person's or the host's reason beyond the outcome; an open ticket has none. */

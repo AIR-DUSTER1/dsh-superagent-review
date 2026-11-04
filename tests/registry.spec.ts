@@ -151,7 +151,7 @@ describe('Source registry', () => {
     const trigger = feishuTrigger({ message_id: 'om_dm', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: 'ou_alice', sender_type: 'user',
       content: 'fix it', create_time: '1757376000000' }, 'ou_bot', 'cli_bot')!
     const channel = trigger.channel!
-    expect(channel.address).toEqual({ chatId: 'oc_dm', messageId: 'om_dm', direct: 'true' })
+    expect(channel.address).toEqual({ chatId: 'oc_dm', messageId: 'om_dm', direct: 'true', threaded: 'false' })
     expect(sources.channelAllowed(channel)).toBe(true)
     const commands = new Commands(() => testDeployment(), {}, new AbortController().signal)
     const run = vi.spyOn(commands, 'run').mockResolvedValue('{"ok":true,"data":{}}')

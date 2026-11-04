@@ -31,5 +31,6 @@ export class HealthBoard {
       },
     }
   }
+  has(name: string): boolean { return this.claimed.has(name) }
   get all(): Readonly<Record<string, Health>> { return this.entries }
 }

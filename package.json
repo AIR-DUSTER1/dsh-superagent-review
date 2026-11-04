@@ -2,7 +2,7 @@
   "name": "dsh-superagent",
   "author": "AIR-DUSTER1",
   "license": "MIT",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "DSH Superagent Review: an independently maintained dsh-superagent distribution with review-mode proposals, approval grants, and console-approved execution.",
   "type": "module",
@@ -16,6 +16,7 @@
     "./client": "./lib/client.js",
     "./github-watch": "./lib/github-watch.js",
     "./feishu-watch": "./lib/feishu-watch.js",
+    "./generic-watch": "./lib/generic-watch.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },

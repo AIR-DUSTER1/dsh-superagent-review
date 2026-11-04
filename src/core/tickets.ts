@@ -40,8 +40,9 @@ export class Tickets extends EnginePart {
     // Fall back to the last trigger for Evals recorded before `primary` existed.
     const primary = this.repo.triggers.get(evaluation.primary ?? triggerIds.at(-1)!)
     const origin = { triggerId: primary?.id ?? triggerIds[0]!, triggerIds }
+    const workspace = workspaceBinding(primary?.meta.workspace)
     let ticket: Ticket = { id, title: outcome.title, decisionId, mandate, channels: [], assignments: [], inputs: [], undelivered: [],
-      createdAt: at, updatedAt: at, origin }
+      createdAt: at, updatedAt: at, origin, ...workspace ? { workspace } : {} }
     for (const triggerId of triggerIds) {
       const channel = this.repo.triggers.get(triggerId)?.channel
       if (channel && !ticket.channels.some(item => sameChannel(item, channel))) ticket.channels.push(channel)
@@ -420,4 +421,14 @@ export class Tickets extends EnginePart {
     if (thread.context?.includes(ticketId)) thread.context = thread.context.filter(id => id !== ticketId)
     this.repo.threads.save(thread)
   }
+}
+
+function workspaceBinding(value: unknown): Ticket['workspace'] | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const item = value as Record<string, unknown>
+  if (typeof item.workspace_id !== 'string' || typeof item.repository_id !== 'string'
+    || typeof item.provider !== 'string' || typeof item.repository_key !== 'string'
+    || typeof item.description_hash !== 'string' || typeof item.description_version !== 'number') return undefined
+  return { workspace_id: item.workspace_id, repository_id: item.repository_id, provider: item.provider,
+    repository_key: item.repository_key, description_hash: item.description_hash, description_version: item.description_version }
 }

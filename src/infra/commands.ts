@@ -62,14 +62,28 @@ export class Commands {
    * @param resolved - returns the resolved deployment setup, or throws while setup is still pending.
    * @param environment - variables overriding `process.env` for every command (such as isolated git settings).
    */
-  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>, private readonly signal: AbortSignal) {}
+  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>,
+    private readonly signal: AbortSignal, private readonly repositoryOverride?: string,
+    private readonly githubHostOverride?: string) {}
   get deployment(): Deployment { return this.resolved() }
-  get repository(): string { return this.deployment.repository }
-  withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
+  get repository(): string { return this.repositoryOverride ?? this.deployment.repository }
+  withSignal(signal?: AbortSignal): Commands {
+    return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal]), this.repositoryOverride, this.githubHostOverride) : this
+  }
+  /** Restricts repository-relative GitHub API calls to another monitored repository without changing the account. */
+  withRepository(repository: string): Commands {
+    return repository === this.repository ? this : new Commands(this.resolved, this.environment, this.signal, repository, this.githubHostOverride)
+  }
+  /** Selects the GitHub host for named workspace instances without changing the authenticated CLI account. */
+  withGitHubHost(host: string | undefined): Commands {
+    if (!host || host === this.githubHostOverride) return this
+    return new Commands(this.resolved, this.environment, this.signal, this.repositoryOverride, host)
+  }
   async run(program: string, args: string[], cwd?: string): Promise<string> {
     try {
       const { stdout } = await exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
+        env: { ...process.env, ...this.environment, ...this.githubHostOverride ? { GH_HOST: this.githubHostOverride } : {},
+          GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
       return stdout
     } catch (error) { throw commandError(error, program) }
   }

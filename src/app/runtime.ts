@@ -24,6 +24,9 @@ import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../
 import { ticketCard } from './cards.ts'
 import { MasterAssessor } from './assessment.ts'
 import { ApprovalBridge } from './approval.ts'
+import { WorkspaceRouter } from './workspace-routing.ts'
+import { WorkspaceService } from './workspace-service.ts'
+import { resolveRoleModel } from './role-models.ts'
 import { KV } from '../kv.ts'
 import { Store } from './store.ts'
 import { evalsHealth } from './views/overview.ts'
@@ -69,6 +72,8 @@ export class Runtime extends Service implements SourceHost {
   readonly executor: DshExecutor
   readonly assessor: MasterAssessor
   readonly approval!: ApprovalBridge
+  readonly workspaceRouter!: WorkspaceRouter
+  readonly workspaceService!: WorkspaceService
   readonly outbox: Outbox
   readonly engine: Engine
   readonly passes: Passes
@@ -114,6 +119,22 @@ export class Runtime extends Service implements SourceHost {
           .catch(() => { /* sync() records its failure in health. */ })
         return () => {}
       })
+      const workspaceRouter = this.workspaceRouter = new WorkspaceRouter(sources, () => store.settings())
+      this.workspaceService = new WorkspaceService({ context: ctx, store, sources, commands, restart, model: async () => {
+        const settings = store.settings()
+        const configured = settings.eval.model ?? settings.executor.model
+        if (configured) {
+          const selected = await resolveRoleModel(ctx, configured)
+          return { provider: selected.provider, model: selected.model,
+            ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}) }
+        }
+        for (const provider of ctx.llm.listProviders()) {
+          const models = await ctx.llm.listModels(provider.id)
+          const first = models[0]
+          if (first) return { provider: first.provider, model: first.id }
+        }
+        return undefined
+      } })
       const links: LinkHost = { store, links: this.sourceLinks, commands, sources, lifetime: this.lifetime }
       const link = (trigger: Trigger, signal?: AbortSignal) => sourceLink(links, trigger, signal)
       const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
@@ -156,10 +177,10 @@ export class Runtime extends Service implements SourceHost {
           const ended = event.type === 'ticket.ended' ? store.tickets.get(event.data.ticketId) : undefined
           if (ended && setup.configured()) {
             const request = store.triggers.get(ended.origin.triggerId)?.text ?? ''
-            for (const message of pullEndNotices(ended, request, setup.deployment.repository)) outbox.send(message)
+            for (const message of pullEndNotices(ended, request, ended.workspace?.repository_key ?? setup.deployment.repository)) outbox.send(message)
           }
         } })
-      approval = new ApprovalBridge({ store, engine, outbox, console: machine.console })
+      approval = new ApprovalBridge({ store, engine, outbox, console: machine.console, workspaceRouter })
       this.approval = approval
       // Update the `evals` health entry on every pass if an evaluation failed as unavailable within the last hour.
       const evals = board.claim('evals', { state: 'ready', detail: 'No unavailable Eval in the last hour' })
@@ -183,7 +204,7 @@ export class Runtime extends Service implements SourceHost {
   get health(): Readonly<Record<string, Health>> { return this.board.all }
   /** Aborted when dsh-superagent stops or loses its state directory lock, cancelling running reads and subprocesses. */
   get lifetime(): AbortSignal { return this.stopped.signal }
-  context(kind: { kind: string; health: readonly string[] }): SourceContext { return sourceContextOf(this.sourceDeps, kind) }
+  context(kind: { kind: string; instanceId?: string; health: readonly string[] }): SourceContext { return sourceContextOf(this.sourceDeps, kind) }
   /** Resolved deployment; throws while waiting for setup (`!configured()`). */
   get deployment(): Deployment { return this.setup.deployment }
   configured(): boolean { return this.setup.configured() }
@@ -229,8 +250,10 @@ export class Runtime extends Service implements SourceHost {
   }
   private httpHost(): HttpHost {
     const runtime = this
-    const { store, sources, prompts, sessions, settings, engine, executor, approval, health, machine, masterId, ready, sourceLinks, setup, passes } = this
+    const { store, sources, prompts, sessions, settings, engine, executor, approval, workspaceService,
+      health, machine, masterId, ready, sourceLinks, setup, passes } = this
     return { store, sources, prompts, sessions, settings, engine, executor, approval, health, machine, masterId, ready, sourceLinks,
+      workspaceService,
       get deployment() { return setup.deployment },
       get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),

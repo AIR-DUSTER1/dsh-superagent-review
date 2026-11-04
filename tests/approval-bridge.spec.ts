@@ -7,6 +7,9 @@ import { Engine, key, type Candidate, type Executor, type OutboundMessage, type 
 import { ApprovalBridge, ApprovalDecisionSchema, ApprovalError } from '../src/app/approval.ts'
 import { Store } from '../src/app/store.ts'
 import { KV } from '../src/kv.ts'
+import { WorkspaceRouter } from '../src/app/workspace-routing.ts'
+import type { SourceRegistry } from '../src/sources/registry.ts'
+import type { WorkspaceBinding } from '../src/policy.ts'
 
 const dirs: string[] = []
 afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }) })
@@ -24,6 +27,16 @@ function harness() {
   }
   let clock = Date.parse('2026-11-02T08:00:00.000Z')
   let bridge: ApprovalBridge
+  const workspace: WorkspaceBinding = { workspace_id: 'workspace-test', workspace_slug: 'test', workspace_name: '测试工作区',
+    repository_id: 'repo-test', provider: 'github', repository_key: 'owner/repo', api_base_url: 'https://api.github.com',
+    web_base_url: 'https://github.com/owner/repo', clone_url: 'https://github.com/owner/repo.git', default_branch: 'main',
+    credential_ref: '', custom_ca_ref: null, description: 'HSE 导出与报表服务', description_version: 1,
+    description_hash: `sha256:${'a'.repeat(64)}`, short_description: 'HSE 导出与报表服务', capabilities: ['导出'],
+    routing_keywords: ['HSE', '导出', '报表'], exclusions: [], confidence: 0.95 }
+  const sourceInstance = { id: 'github-test', kind: 'github', enabled: true, config: { repository: 'owner/repo' }, workspace, installed: true }
+  const sources = { instances: () => [sourceInstance], instance: (id: string) => id === 'github-test' ? sourceInstance : undefined,
+    kindFor: () => 'github' } as unknown as SourceRegistry
+  const workspaceRouter = new WorkspaceRouter(sources, () => store.settings())
   const policy: Policy = { version: 'review-v1', paused: false, evalTimeoutMs: 60_000, reviewOnly: true,
     gate: () => ({ admissible: true, strength: 'explicit', basis: { via: 'addressed', addressed: 'mention', source: 'feishu', sender: '陈晓' } }),
     revalidate: () => true, admitsInferred: rules => rules.length > 0 }
@@ -34,13 +47,15 @@ function harness() {
     now: () => new Date(clock).toISOString(),
   })
   bridge = new ApprovalBridge({ store, engine, outbox: { send: outbox.send }, now: () => new Date(clock).toISOString(),
+    workspaceRouter,
     console: { url: 'http://console.test', eventSecret: 'event-secret', sharedSecret: 'shared-secret' },
     fetcher: async () => new Response(null, { status: 200 }) })
   const trigger: Trigger = { id: 'trigger-1', source: 'feishu', threads: [{ source: 'feishu', id: 'chat:1' }],
     actor: { source: 'feishu', id: 'ou_chen' }, human: true, addressed: 'mention', at: new Date(clock).toISOString(),
     text: '请新增 HSE 导出功能', url: 'https://example.test/message/1',
-    channel: { source: 'feishu', thread: 'chat:1', address: { message_id: 'om_1' } }, meta: {} }
-  return { store, engine, bridge, requests, launches, delivered, trigger,
+    channel: { source: 'feishu', thread: 'chat:1', address: { message_id: 'om_1' } },
+    meta: { workspace_id: workspace.workspace_id, repository_id: workspace.repository_id } }
+  return { store, engine, bridge, requests, launches, delivered, trigger, workspace,
     tick: (ms: number) => { clock += ms } }
 }
 
@@ -59,7 +74,7 @@ describe('approval bridge', () => {
     const decision = ApprovalDecisionSchema.parse({
       proposal_id: 'proposal-1', decision: 'approve', reviewer: '演示复核人',
       grant_id: 'grant-test-1',
-      requirement_hash: hash, scope_hash: hash,
+      requirement_hash: hash, scope_hash: hash, workspace_binding_hash: hash,
       schedule_at: '2026-11-02T08:05:00.000Z', expires_at: '2026-11-02T09:00:00.000Z',
       trace_id: 'trace-1', idempotency_key: 'decision-1',
     })
@@ -88,6 +103,7 @@ describe('approval bridge', () => {
     h.tick(60_000)
     const approved = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
       comment: '范围明确', grant_id: 'grant-gatehouse-1', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!,
       schedule_at: new Date(Date.parse('2026-11-02T08:05:00.000Z')).toISOString(),
       expires_at: new Date(Date.parse('2026-11-02T09:00:00.000Z')).toISOString(), trace_id: 'trace-1', idempotency_key: 'decision-1' })
     expect(approved.proposal.status).toBe('approved')
@@ -99,19 +115,44 @@ describe('approval bridge', () => {
     expect(scheduleNotice?.text).toContain('这是开发开始时间，不是完成时间。')
 
     expect(() => h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
-      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!, execution_id: 'execution-1',
       trace_id: 'trace-2', idempotency_key: 'execute-1' })).toThrowError(/schedule has not arrived/)
 
     h.tick(10 * 60_000)
     const executed = h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
-      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!, execution_id: 'execution-1',
       trace_id: 'trace-2', idempotency_key: 'execute-1' })
     expect(executed.ticket_id).toBe(key('ticket', 'approval', proposal.id))
     expect(h.store.tickets.get(executed.ticket_id)).toBeTruthy()
     expect(h.bridge.get(proposal.id)).toMatchObject({ status: 'executing', grant: { status: 'consumed' }, execution: { id: 'execution-1' } })
     expect(h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
-      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!, execution_id: 'execution-1',
       trace_id: 'trace-2', idempotency_key: 'execute-1' }).replayed).toBe(true)
+    h.store.close()
+  })
+
+  it('rejects a changed workspace binding hash and records a manual reassignment', () => {
+    const h = harness()
+    accept(h)
+    const proposal = h.bridge.list()[0]!
+    h.tick(60_000)
+    const wrong = `sha256:${'b'.repeat(64)}`
+    expect(() => h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
+      grant_id: 'grant-gatehouse-1', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: wrong, schedule_at: '2026-11-02T08:05:00.000Z',
+      expires_at: '2026-11-02T09:00:00.000Z', trace_id: 'trace-1', idempotency_key: 'decision-bad' }))
+      .toThrowError(/binding changed/)
+    const reassigned = h.bridge.reassign({ proposal_id: proposal.id, workspace_id: h.workspace.workspace_id,
+      repository_id: h.workspace.repository_id, reason: '复核后确认目标仓库', trace_id: 'trace-route', idempotency_key: 'route-1' })
+    expect(reassigned).toMatchObject({ workspace_id: h.workspace.workspace_id, repository_id: h.workspace.repository_id,
+      status: 'pending_review', routing_decision: { mode: 'manual', reason: '复核后确认目标仓库' } })
+    expect(reassigned.workspace_binding_hash).toMatch(/^sha256:[a-f0-9]{64}$/)
+    const event = h.store.get(KV.approval.event(`proposal.updated:${proposal.id}`))!.event
+    expect(event).toMatchObject({ version: '2.0', data: { workspace_id: h.workspace.workspace_id, repository_id: h.workspace.repository_id,
+      routing_decision: { mode: 'manual' } } })
     h.store.close()
   })
 
@@ -122,11 +163,13 @@ describe('approval bridge', () => {
     h.tick(60_000)
     const approved = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
       comment: '', grant_id: 'grant-gatehouse-1', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!,
       schedule_at: '2026-11-02T08:05:00.000Z', expires_at: '2026-11-02T09:00:00.000Z',
       trace_id: 'trace-1', idempotency_key: 'decision-1' })
 
     const changed = h.bridge.reschedule(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
       requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!,
       schedule_at: '2026-11-02T08:15:00.000Z', expires_at: '2026-11-02T09:15:00.000Z',
       trace_id: 'trace-change', idempotency_key: 'change-1' })
     expect(changed.proposal.grant).toMatchObject({ schedule_at: '2026-11-02T08:15:00.000Z', status: 'active' })
@@ -135,10 +178,12 @@ describe('approval bridge', () => {
 
     const changedAgain = h.bridge.reschedule(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
       requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!,
       schedule_at: '2026-11-02T08:20:00.000Z', expires_at: '2026-11-02T09:20:00.000Z',
       trace_id: 'trace-change-2', idempotency_key: 'change-2' })
     const replayedOld = h.bridge.reschedule(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
       requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!,
       schedule_at: '2026-11-02T08:15:00.000Z', expires_at: '2026-11-02T09:15:00.000Z',
       trace_id: 'trace-change', idempotency_key: 'change-1' })
     expect(replayedOld.replayed).toBe(true)
@@ -146,12 +191,14 @@ describe('approval bridge', () => {
     expect(replayedOld.proposal.grant?.schedule_at).toBe('2026-11-02T08:20:00.000Z')
 
     expect(() => h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
-      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!, execution_id: 'execution-1',
       trace_id: 'trace-2', idempotency_key: 'execute-1' })).toThrowError(/schedule has not arrived/)
 
     h.tick(19 * 60_000)
     const executed = h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
-      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!, execution_id: 'execution-1',
       trace_id: 'trace-2', idempotency_key: 'execute-1' })
     expect(executed.ticket_id).toBe(key('ticket', 'approval', proposal.id))
     h.store.close()
@@ -164,24 +211,29 @@ describe('approval bridge', () => {
     h.tick(60_000)
     const approved = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
       comment: '', grant_id: 'grant-gatehouse-1', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!,
       schedule_at: '2026-11-02T08:05:00.000Z', expires_at: '2026-11-02T09:00:00.000Z',
       trace_id: 'trace-1', idempotency_key: 'decision-1' })
     const withdrawn = h.bridge.withdraw(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
-      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, reason: '排期调整',
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!, reason: '排期调整',
       trace_id: 'trace-withdraw', idempotency_key: 'withdraw-1' })
     expect(withdrawn.proposal).toMatchObject({ status: 'pending_review', grant: { status: 'revoked' } })
     expect(h.delivered.some(message => message.text.includes('开发排期已撤回'))).toBe(true)
     expect(() => h.bridge.execute({ proposal_id: proposal.id, grant_id: approved.grant!.id,
-      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, execution_id: 'execution-1',
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!, execution_id: 'execution-1',
       trace_id: 'trace-2', idempotency_key: 'execute-1' })).toThrowError(/pending_review/)
 
     const renewed = h.bridge.decide(proposal.id, { proposal_id: proposal.id, decision: 'approve', reviewer: '演示复核人',
       comment: '', grant_id: 'grant-gatehouse-2', requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!,
       schedule_at: '2026-11-02T08:30:00.000Z', expires_at: '2026-11-02T09:30:00.000Z',
       trace_id: 'trace-renew', idempotency_key: 'decision-2' })
     expect(renewed.proposal).toMatchObject({ status: 'approved', grant: { status: 'active' } })
     const oldWithdrawal = h.bridge.withdraw(proposal.id, { proposal_id: proposal.id, grant_id: approved.grant!.id,
-      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash, reason: '排期调整',
+      requirement_hash: proposal.requirement_hash, scope_hash: proposal.scope_hash,
+      workspace_binding_hash: proposal.workspace_binding_hash!, reason: '排期调整',
       trace_id: 'trace-withdraw', idempotency_key: 'withdraw-1' })
     expect(oldWithdrawal.replayed).toBe(true)
     expect(h.bridge.get(proposal.id)).toMatchObject({ status: 'approved', grant: { status: 'active' } })

@@ -17,7 +17,7 @@ DSH Superagent Review 是一个面向受控交付场景的 **dsh-superagent 独�
 ## 工作方式
 
 ```text
-飞书 / GitHub 需求
+飞书 / GitHub / 内网 Git 仓库任务
   ↓
 DSH Superagent Review：接收需求 + 只读评估 + 生成 Proposal
   ↓  HMAC 事件
@@ -35,7 +35,7 @@ execution.started / execution.finished / execution.failed
 - `review` 模式下，评估通过只生成 Proposal，不创建 Ticket、worktree 或 PR。
 - 人工批准前不会运行命令、修改文件、清理订阅或产生其他代码执行副作用。
 - 收到需求后先向发起人解释浅显原因并告知已记录、已移交开发；批准后再通知开发开始时间。
-- ApprovalGrant 绑定 `requirement_hash`、`scope_hash`、`scheduled_at` 和过期时间。
+- ApprovalGrant 绑定 `requirement_hash`、`scope_hash`、`workspace_binding_hash`、排期和过期时间。
 - Gatehouse 在批准命令中下发 canonical `grant_id`；执行侧不得生成第二枚 Grant ID。
 - Grant 在执行前原子消费，重复请求使用同一 `execution_id`，不会重复创建 Worker。
 - DSH Superagent Review 不自行判断人工审批结果；Gatehouse 不直接操作 Git 或 PR。
@@ -55,6 +55,11 @@ execution.started / execution.finished / execution.failed
 - 改期会更新活动 Grant 并再次通知发起人；撤回会吊销 Grant、回到待复核并阻止旧授权执行。
 - Worker `failed` / `blocked` 报告回传 `execution.failed`。
 - gatehouse 风格的 Review 模式配置入口和双语提示。
+- Gatehouse 签名同步多个工作区、多个仓库和版本化仓库描述。
+- 同一 Source kind 支持多个实例；线程键、轮询游标、健康状态和去重键按实例隔离。
+- Proposal 事件升级为 `2.0`，携带工作区、仓库、路由依据和绑定哈希；仍接受 `1.0` 历史事件。
+- 原生 GitHub 事件确定性路由；飞书/人工任务按已确认仓库描述做确定性语义路由，低置信度强制人工确认。
+- 全局统计由 Gatehouse 聚合；DSH 提供仓库发现、README 摘要和当前配置模型生成描述。
 
 ## 环境要求
 
@@ -132,7 +137,7 @@ pnpm dev
 
 DSH Superagent Review → Gatehouse：
 
-- `proposal.created`
+- `proposal.created`（事件 `2.0`）
 - `proposal.superseded`
 - `execution.started`
 - `execution.finished`
@@ -142,7 +147,39 @@ Gatehouse → DSH Superagent Review：
 
 - 审批决策。
 - 到期执行命令。
+- 工作区同步、仓库校验、描述生成和人工改派。
 - 两侧均使用 HMAC、timestamp、nonce 和 idempotency key。
+
+### 5. 工作区与多仓库
+
+Gatehouse 是仓库和工作区配置的控制面。每次确认仓库描述后，Gatehouse 调用：
+
+```text
+POST /orchestrator/api/workspaces/sync
+```
+
+DSH 保存最后一份已确认配置并重启应用。配置项包括：
+
+- `workspace_id`、`repository_id`、Provider、仓库标识和默认分支。
+- `credential_ref`：只保存引用，不保存 Token；支持 `env:NAME`、`file:PATH`，当前用于只读仓库发现。Git Push/PR 继续使用 DSH 运行账户已配置的 `gh`/Git 凭据。
+- 仓库能力、路由关键词、排除项、描述版本和描述哈希。
+- 每个仓库独立 `source_instance_id`，因此同名 Issue/PR 编号不会冲突。
+
+内网地址默认禁止。需要内网 Git 服务时显式设置：
+
+```dotenv
+DSH_SUPERAGENT_ALLOW_PRIVATE_REPOSITORY_HOSTS=true
+DSH_SUPERAGENT_REPOSITORY_HOST_ALLOWLIST=git.internal.example
+```
+
+### Provider 能力边界
+
+| Provider | 当前能力 |
+| --- | --- |
+| GitHub / GitHub Enterprise | 多实例事件轮询、评论、CI 观察、执行环境与 PR 交付；GHE 需要 `gh` CLI 已登录对应主机并配置主机允许列表 |
+| GitLab / Gitea / Bitbucket / 裸 Git | 通过通用执行 Target 接入：可连接、校验、生成描述、路由和执行 Git 交付；本版本不轮询原生 Issue/MR 事件。原生 Provider 事件属于后续增量 |
+
+通用执行 Target 不伪造原生事件支持。相关任务来源应使用飞书、Webhook 或人工录入，并由仓库描述路由。首版只解析 `env:` 与 `file:` 凭据引用；`system:` 凭据存储和 `custom_ca_ref` 会明确拒绝，不会静默忽略。
 
 ## 常用命令
 
@@ -157,6 +194,12 @@ pnpm check  # typecheck + test + build
 
 ```powershell
 pnpm exec vitest run tests/approval-bridge.spec.ts tests/core-engine.spec.ts tests/policy.spec.ts tests/http.spec.ts tests/panel-settings.spec.tsx tests/locales.spec.ts
+```
+
+工作区、路由与描述生成测试：
+
+```powershell
+pnpm exec vitest run tests/workspace-service.spec.ts tests/workspace-routing.spec.ts tests/registry.spec.ts tests/bundle-patch.spec.ts
 ```
 
 > 完整仓库测试仍包含依赖 POSIX `sh`、`sleep`、symlink 和 Unix mode bits 的上游用例；在 Windows 环境中这些既有测试可能失败。Windows 下请以 TypeScript、构建和审批相关测试结果作为本发行版的验收依据。
