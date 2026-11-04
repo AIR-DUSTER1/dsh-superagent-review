@@ -7,6 +7,7 @@ import { threadKey, type Thread, type Trigger } from '../core/index.ts'
 import { feishuChatLink } from './feishu-channel.ts'
 import type { FeishuBot } from '../deployment.ts'
 import { validItems, type Tally } from '../infra/commands.ts'
+import { isTransientNetworkFailure } from '../infra/retry.ts'
 import { readFeishu, type FeishuRef } from './feishu-read.ts'
 import { feishuRef, feishuTime, feishuTrigger, HistoricalMessageSchema, historyEvent, HistoryPageSchema, SOURCE, topicEvent }
   from './feishu-trigger.ts'
@@ -73,7 +74,12 @@ async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
       LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
   const stdout = createInterface({ input: child.stdout }); const stderr = createInterface({ input: child.stderr })
   let chain = Promise.resolve(); let diagnostic = ''; let ready = false
-  const stop = (): void => { child.stdin.end(); child.kill('SIGTERM') }
+  const stop = (): void => {
+    child.stdin.end()
+    if (child.exitCode === null && child.signalCode === null) {
+      try { child.kill('SIGTERM') } catch { /* The child may have exited between the checks and the signal. */ }
+    }
+  }
   signal.addEventListener('abort', stop, { once: true })
   const timeout = setTimeout(() => { diagnostic = 'Feishu event consumer did not become ready within 45 seconds'; stop() }, 45_000)
   stderr.on('line', (line: string) => {
@@ -125,7 +131,8 @@ async function chatNamesLoop(ctx: SourceContext, signal: AbortSignal): Promise<v
     await delay(60_000, undefined, { signal }).catch(() => {})
   }
 }
-async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<void> {
+export async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<void> {
+  let transientRounds = 0
   await ctx.ready
   if (!available(ctx)) { ctx.report('history', health('paused', 'feishuBotMissing')); return }
   while (!signal.aborted) {
@@ -153,9 +160,22 @@ async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<vo
     }
     await pollThreads(ctx, signal, tally)
     const skipped = tally.skipped ? `; ${tally.skipped} unreadable messages skipped` : ''
-    if (!signal.aborted) ctx.report('history', errors.length
-      ? { state: 'error', detail: errors.join('\n') }
-      : { state: 'ready', detail: `Configured groups and known direct chats recovered${skipped}`, at: new Date().toISOString() })
+    if (!signal.aborted) {
+      if (!errors.length) {
+        transientRounds = 0
+        ctx.report('history', { state: 'ready', detail: `Configured groups and known direct chats recovered${skipped}`, at: new Date().toISOString() })
+      } else if (errors.every(error => isTransientNetworkFailure(error))) {
+        transientRounds += 1
+        if (transientRounds < 3) {
+          ctx.report('history', { state: 'starting', detail: `Transient Feishu history network failure; retrying automatically (${transientRounds}/3)`, at: new Date().toISOString() })
+        } else {
+          ctx.report('history', { state: 'error', detail: errors.join('\n'), at: new Date().toISOString() })
+        }
+      } else {
+        transientRounds = 0
+        ctx.report('history', { state: 'error', detail: errors.join('\n'), at: new Date().toISOString() })
+      }
+    }
     await delay(60_000, undefined, { signal }).catch(() => {})
   }
 }

@@ -118,7 +118,7 @@ export class Commands {
   async lark<T>(args: string[], cwd?: string): Promise<T> {
     const bot = this.deployment.feishu
     if (!bot) throw new Error('The Feishu Source has no working bot CLI')
-    const output = await retryTransient(() => this.run(bot.cli, [...args, '--as', 'bot', '--format', 'json'], cwd), this.signal)
+    const output = await retryTransient(() => this.run(bot.cli, [...args, '--as', 'bot', '--format', 'json'], cwd), this.signal, 4, 1_000)
       .catch((error: unknown) => { throw membership(error) })
     const result = JSON.parse(output) as { ok: boolean; data: T; error?: { code?: number; message?: string } }
     const code = result.error?.code

@@ -1180,9 +1180,9 @@ describe('feishu event consumer', () => {
     expect(store.triggers.get(feishuTriggerId('om_9'))).toBeUndefined()
     controller.abort(); await running; store.close()
   }, 20_000)
-  it('keeps a chat\'s history cursor when its read fails, and recovers known direct chats only while direct messages are on', async () => {
+  it('keeps a chat\'s history cursor when its read fails, retries transient network failures, and recovers known direct chats only while direct messages are on', async () => {
     const hour = new Date(Date.now() - 3_600_000).toISOString()
-    const recovered = async (directMessages: boolean) => {
+    const recovered = async (directMessages: boolean, failure = 'rate limited', waitDetail = 'rate limited') => {
       const chat = (chatId: string) => ({ chatId, listen: 'mentions' })
       const { ctx, health, store } = consumerSource(cli('ready'), { chats: [chat('oc_a'), chat('oc_b')], directMessages })
       store.set(KV.feishu.chats, { oc_dm: true, oc_a: false })
@@ -1191,12 +1191,12 @@ describe('feishu event consumer', () => {
       const lark = vi.spyOn(Commands.prototype, 'lark').mockImplementation(async args => {
         const params = args[2] === '/open-apis/im/v1/messages' ? JSON.parse(args.at(-1)!) as { container_id: string } : undefined
         if (params) chats.push(params.container_id)
-        if (params?.container_id === 'oc_a') throw new Error('rate limited')
+        if (params?.container_id === 'oc_a') throw new Error(failure)
         return { has_more: false, items: [] }
       })
       const stop = new AbortController()
       const loops = runFeishu(ctx, AbortSignal.any([stop.signal, controller.signal]))
-      await vi.waitFor(() => expect(['ready', 'error']).toContain(health.history?.state), until)
+      await vi.waitFor(() => expect(health.history?.detail ?? '').toContain(waitDetail), until)
       stop.abort(); await loops; lark.mockRestore()
       const cursors = Object.fromEntries(['oc_a', 'oc_b', 'oc_dm'].map(chat => [chat, store.get(KV.feishu.history(chat))]))
       const result = { chats, cursors, history: health.history }
@@ -1210,6 +1210,9 @@ describe('feishu event consumer', () => {
     expect(on.cursors.oc_a).toBe(hour)
     expect(Date.parse(on.cursors.oc_b!)).toBeGreaterThan(Date.parse(hour))
     expect(Date.parse(on.cursors.oc_dm!)).toBeGreaterThan(Date.parse(hour))
+    const transient = await recovered(true, 'read tcp: An existing connection was forcibly closed by the remote host', 'retrying automatically (1/3)')
+    expect(transient.history).toMatchObject({ state: 'starting', detail: expect.stringContaining('retrying automatically (1/3)') })
+    expect(transient.cursors.oc_a).toBe(hour)
     const off = await recovered(false)
     expect(off.chats).toEqual(['oc_a', 'oc_b'])
     expect(off.cursors.oc_dm).toBe(hour)

@@ -60,6 +60,7 @@ execution.started / execution.finished / execution.failed
 - Proposal 事件升级为 `2.0`，携带工作区、仓库、路由依据和绑定哈希；仍接受 `1.0` 历史事件。
 - 原生 GitHub 事件确定性路由；飞书/人工任务按已确认仓库描述做确定性语义路由，低置信度强制人工确认。
 - 全局统计由 Gatehouse 聚合；DSH 提供仓库发现、README 摘要和当前配置模型生成描述。
+- 飞书历史补收对 API/CDN 瞬时断连进行单请求 4 次指数退避；连续 3 轮仍失败才报告 `history` 错误。
 
 ## 环境要求
 
