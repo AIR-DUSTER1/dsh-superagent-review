@@ -1,7 +1,7 @@
 /** Main plugin entry: mounts the Runtime and provides its restart callback for deployment account changes. */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
-import { Runtime } from './app/runtime.ts'
+import { retryStateLock, Runtime } from './app/runtime.ts'
 import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
 
 export const name = 'dsh-superagent'
@@ -18,10 +18,17 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   const restart = (): void => {
     ctx.fiber.restart().then(() => { ctx.get('settings')?.describe() }).catch((error: unknown) => { ctx.logger.error('dsh-superagent restart failed: %s', String(error)) })
   }
-  const runtime = new Runtime(ctx, machine, restart)
+  // A DSH update can terminate the previous host just before this one starts. Keep the plugin recoverable while
+  // proper-lockfile's recent lock ages into a provably stale lock instead of turning the update into a missing plugin.
+  const runtime = await retryStateLock(() => new Runtime(ctx, machine, restart))
   ctx.effect(() => async () => { await runtime.stop() })
-  await runtime.ready
-  ctx.logger.info(runtime.configured() ? 'dsh-superagent ready; the Superagent sidebar entry opens the management panel' : `dsh-superagent is waiting for setup: ${runtime.setupProblem?.detail ?? ''}`)
+  // The Runtime registers its management HTTP routes before probing external accounts. Complete plugin activation
+  // without waiting for those network checks, so an update during an outage still leaves the panel available.
+  void runtime.ready.then(() => {
+    ctx.logger.info(runtime.configured() ? 'dsh-superagent ready; the Superagent sidebar entry opens the management panel' : `dsh-superagent is waiting for setup: ${runtime.setupProblem?.detail ?? ''}`)
+  }).catch((error: unknown) => {
+    ctx.logger.error('dsh-superagent startup failed: %s', String(error))
+  })
 }
 export type { Deployment, DeploymentConfig } from './deployment.ts'
 export * from './core/index.ts'

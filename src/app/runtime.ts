@@ -54,6 +54,44 @@ import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
 // Source plugins interact with dsh-superagent exclusively through the `SourceHost` service interface.
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
 const now = (): string => new Date().toISOString()
+const STATE_LOCK_STALE_MS = 30_000
+const STATE_LOCK_RETRY_DELAY_MS = 1_000
+
+/** Timing overrides for {@link retryStateLock}; production callers use the defaults. */
+export interface StateLockRetryOptions {
+  /** Delay between attempts while a recent state lock is waiting to become stale. */
+  readonly retryDelayMs?: number
+  /** Total time allowed for the lock to become stale and a retry to succeed. */
+  readonly timeoutMs?: number
+}
+
+function isStateLockHeld(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ELOCKED'
+}
+
+/**
+ * Retry opening a Runtime while DSH replaces an interrupted process whose recent state lock has not reached
+ * proper-lockfile's stale threshold. Unrelated initialization failures still propagate immediately, and a lock
+ * that remains live fails after the bounded retry window.
+ * @param open - Constructs the Runtime, including the state-directory lock and database-open step.
+ * @param options - Test-scale retry timings; production uses the lock's real stale threshold.
+ * @returns The Runtime returned by the first successful open attempt.
+ */
+export async function retryStateLock<T>(
+  open: () => T | Promise<T>,
+  options: StateLockRetryOptions = {},
+): Promise<T> {
+  const retryDelayMs = Math.max(1, options.retryDelayMs ?? STATE_LOCK_RETRY_DELAY_MS)
+  const deadline = Date.now() + Math.max(0, options.timeoutMs ?? STATE_LOCK_STALE_MS + retryDelayMs)
+  for (;;) {
+    try {
+      return await open()
+    } catch (error) {
+      if (!isStateLockHeld(error) || Date.now() >= deadline) throw error
+      await new Promise<void>(resolve => setTimeout(resolve, retryDelayMs))
+    }
+  }
+}
 
 /**
  * Composition root of dsh-superagent that connects `Store`, `Setup`, `Engine`, `SourceRegistry`, `Effects`, `Outbox`, `Passes`, `Sessions`, `Settings`, `Prompts`, `DshExecutor`, and `MasterAssessor`.
@@ -97,7 +135,7 @@ export class Runtime extends Service implements SourceHost {
     // Lock the state directory before opening the database so another process cannot migrate or write concurrently.
     mkdirSync(machine.stateDir, { recursive: true, mode: 0o700 })
     const compromised = (error: Error) => { this.runtimeHealth.set({ state: 'error', detail: error.message }); this.stopped.abort() }
-    const release = lockSync(machine.stateDir, { stale: 30_000, onCompromised: compromised })
+    const release = lockSync(machine.stateDir, { stale: STATE_LOCK_STALE_MS, onCompromised: compromised })
     this.releaseLock = async () => { release() }
     let opened: Store | undefined
     try {
@@ -194,7 +232,10 @@ export class Runtime extends Service implements SourceHost {
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
-      this.ready = this.initialize()
+      this.ready = this.initialize().catch((error: unknown) => {
+        this.runtimeHealth.set({ state: 'error', detail: error instanceof Error ? error.message : String(error), at: now() })
+        throw error
+      })
     } catch (error) {
       // Release the database and state lock if initialization fails so an in-process restart can reacquire them.
       try { opened?.close() } finally { release() }

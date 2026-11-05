@@ -248,6 +248,8 @@ A restart ends running Assignments and starts replacements with recovery notes. 
 
 A database migrated by a newer version cannot be opened by an older one. Rollback therefore requires the pre-upgrade backup. After upgrading DeepSeek Harness itself, restart the running instance so the panel loads matching artifacts.
 
+DSH keeps plugins per profile. Enable `dsh-superagent` in the profile the upgraded surface actually launches; DeepSeek Harness Desktop uses the `desktop` profile. If the upgrade terminated the previous process, the next start retries the recent state-directory lock while it becomes stale instead of reporting the plugin as missing. The management panel also becomes available before external account checks finish, so a slow or offline GitHub or Feishu probe no longer hides the whole plugin.
+
 ### Agent presets
 
 The worker and router presets move shell commands to the background after 5 seconds. A Session cannot load without its preset. Keep the `dsh-superagent-worker` and `dsh-superagent-router` rows in `cordis.patch.yml` while their Sessions are in use; otherwise resume fails with `agent-preset/not-found`.
@@ -275,6 +277,7 @@ Setup problems appear on the overview with a link to the fix, in the panel's lan
 | `status` exits 1 | The service does not run, runs twice, does not answer, or its runtime reports an error; the output and the newest log say which |
 | `… timed out after 90 s`, `… was stopped by …`, `… exited with code …` or `… could not run: …` | A CLI failed without printing why; run the named program by hand as the operator's user to see its own message |
 | The panel says dsh-superagent is not answering | It is restarting, or did not start because of its configuration; the DeepSeek Harness log names the cause |
+| The Superagent entry or panel is missing after an update | Enable `dsh-superagent` in the profile DSH actually launched; Desktop uses `desktop`. If the old process was terminated, keep DSH open for up to one minute while its recent state lock becomes stale and the plugin retries it |
 | `dsh-superagent configuration has keys it does not use` (log) | Remove the named keys; the message says where each value lives now |
 | The log says the plugin is incompatible with the running dsh | Install a DeepSeek Harness version within the `engines.dsh` range |
 | The panel shows "Failed to load plugins" after a DeepSeek Harness upgrade | Restart the running instance |

@@ -4,12 +4,16 @@ import { apply } from '../src/index.ts'
 
 // Stub Runtime to capture the resolved Machine settings and restart callback.
 const runtimes = vi.hoisted(() => [] as { machine: Machine; restart: () => void }[])
-vi.mock('../src/app/runtime.ts', () => ({ Runtime: class {
-  ready = Promise.resolve()
-  constructor(_ctx: unknown, readonly machine: Machine, readonly restart: () => void) { runtimes.push(this) }
-  configured() { return true }
-  async stop() {}
-} }))
+const readiness = vi.hoisted(() => [] as Promise<void>[])
+vi.mock('../src/app/runtime.ts', () => ({
+  retryStateLock: async (open: () => unknown) => open(),
+  Runtime: class {
+    ready = readiness.shift() ?? Promise.resolve()
+    constructor(_ctx: unknown, readonly machine: Machine, readonly restart: () => void) { runtimes.push(this) }
+    configured() { return true }
+    async stop() {}
+  },
+}))
 /** Simulate the Cordis loader updating a volatile configuration reference in place. */
 const commit = (reference: unknown, value: unknown) => { (reference as Record<symbol, (value: unknown) => void>)[Symbol.for('cosmokit.volatile.write')]!(value) }
 
@@ -52,6 +56,16 @@ it('asks DSH to read its settings entry again once a restart it started finished
   expect(describe).not.toHaveBeenCalled()
   finish()
   await vi.waitFor(() => { expect(describe).toHaveBeenCalledTimes(1) })
+})
+
+it('stays active while startup account checks are still running', async () => {
+  const { ctx } = context()
+  const before = runtimes.length
+  let finish = () => {}
+  readiness.push(new Promise<void>(resolve => { finish = resolve }))
+  await apply(ctx as never, Config({ stateDir: '/srv/state' }))
+  expect(runtimes).toHaveLength(before + 1)
+  finish()
 })
 
 it('refuses keys of the previous configuration before registering anything', async () => {
