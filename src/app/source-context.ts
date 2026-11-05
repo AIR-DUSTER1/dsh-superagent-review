@@ -56,10 +56,11 @@ export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; i
       ? binding.workspace_id === workspace.workspace_id && binding.repository_id === workspace.repository_id
       : instanceId === kind.kind
   }
-  const scopedCommands = workspace?.repository_key
+  const commandsFor = (): Commands => workspace?.repository_key
     ? deps.commands.withRepository(workspace.repository_key).withGitHubHost(githubHost(workspace))
     : deps.commands
-  const scopedDeployment = workspace?.repository_key ? { ...deps.deployment, repository: workspace.repository_key } : deps.deployment
+  const deploymentFor = (): Deployment => workspace?.repository_key
+    ? { ...deps.deployment, repository: workspace.repository_key } : deps.deployment
   const receive = (trigger: Trigger): ReceiveResult | Promise<ReceiveResult> => {
     const id = instanceId !== kind.kind && !trigger.id.startsWith(`${instanceId}:`) ? `${instanceId}:${trigger.id}` : trigger.id
     return deps.receive({
@@ -78,8 +79,8 @@ export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; i
   return {
     instanceId,
     kindId: kind.kind,
-    get deployment() { return scopedDeployment },
-    commands: scopedCommands,
+    get deployment() { return deploymentFor() },
+    get commands() { return commandsFor() },
     ready: deps.ready,
     configured: () => deps.configured(),
     get problem() { return [deps.feishuProblem, deps.setupProblem].find(problem => problem?.place === kind.kind) },

@@ -65,6 +65,27 @@ describe('workspace routing', () => {
     expect(workspaceBindingHash(payments)).toMatch(/^sha256:[a-f0-9]{64}$/)
   })
 
+  it('constructs a workspace Source context before deployment and commands resolve', () => {
+    const { sources } = setup()
+    let deploymentReads = 0
+    let commandReads = 0
+    const deps = {
+      sources,
+      get deployment() { deploymentReads++; throw new Error('setup has not run') },
+      get commands() { commandReads++; throw new Error('commands are not resolved') },
+      ready: new Promise<void>(() => {}),
+      configured: () => false,
+    } as unknown as SourceContextDeps
+    const context = sourceContextOf(deps, { kind: 'github', instanceId: 'github-payments', health: ['github'] })
+    expect(deploymentReads).toBe(0)
+    expect(commandReads).toBe(0)
+    expect(context.configured()).toBe(false)
+    expect(() => context.commands).toThrow('commands are not resolved')
+    expect(() => context.deployment).toThrow('setup has not run')
+    expect(commandReads).toBe(1)
+    expect(deploymentReads).toBe(1)
+  })
+
   it('namespaces trigger ids, threads and poll state for same-kind instances', () => {
     const { sources } = setup()
     const dir = mkdtempSync(join(tmpdir(), 'workspace-context-'))

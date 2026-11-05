@@ -6,7 +6,7 @@ import { apply } from '../src/index.ts'
 const runtimes = vi.hoisted(() => [] as { machine: Machine; restart: () => void }[])
 const readiness = vi.hoisted(() => [] as Promise<void>[])
 vi.mock('../src/app/runtime.ts', () => ({
-  retryStateLock: async (open: () => unknown) => open(),
+  acquireStateDirectoryLock: async () => ({ release: vi.fn(), setCompromisedHandler: vi.fn() }),
   Runtime: class {
     ready = readiness.shift() ?? Promise.resolve()
     constructor(_ctx: unknown, readonly machine: Machine, readonly restart: () => void) { runtimes.push(this) }

@@ -57,12 +57,22 @@ const now = (): string => new Date().toISOString()
 const STATE_LOCK_STALE_MS = 30_000
 const STATE_LOCK_RETRY_DELAY_MS = 1_000
 
-/** Timing overrides for {@link retryStateLock}; production callers use the defaults. */
+/** Timing overrides for {@link acquireStateDirectoryLock}; production callers use the defaults. */
 export interface StateLockRetryOptions {
+  /** Age at which proper-lockfile may remove an unchanged lock; production uses 30 seconds. */
+  readonly staleMs?: number
   /** Delay between attempts while a recent state lock is waiting to become stale. */
   readonly retryDelayMs?: number
   /** Total time allowed for the lock to become stale and a retry to succeed. */
   readonly timeoutMs?: number
+}
+
+/** State-directory ownership acquired before Runtime construction registers the `orchestrator` service. */
+export interface StateDirectoryLock {
+  /** Remove this process's ownership. */
+  release(): void
+  /** Route a later stale-lock compromise to the Runtime that owns the database. */
+  setCompromisedHandler(handler: (error: Error) => void): void
 }
 
 function isStateLockHeld(error: unknown): boolean {
@@ -70,19 +80,20 @@ function isStateLockHeld(error: unknown): boolean {
 }
 
 /**
- * Retry opening a Runtime while DSH replaces an interrupted process whose recent state lock has not reached
- * proper-lockfile's stale threshold. Unrelated initialization failures still propagate immediately, and a lock
- * that remains live fails after the bounded retry window.
- * @param open - Constructs the Runtime, including the state-directory lock and database-open step.
+ * Retry a state-lock acquisition while DSH replaces an interrupted process whose lock has not reached
+ * proper-lockfile's stale threshold. Unrelated failures still propagate immediately, and a lock that
+ * remains live fails after the bounded retry window.
+ * @param open - Attempts to acquire only the state lock.
  * @param options - Test-scale retry timings; production uses the lock's real stale threshold.
- * @returns The Runtime returned by the first successful open attempt.
+ * @returns The lock release returned by the first successful attempt.
  */
 export async function retryStateLock<T>(
   open: () => T | Promise<T>,
   options: StateLockRetryOptions = {},
 ): Promise<T> {
+  const staleMs = options.staleMs ?? STATE_LOCK_STALE_MS
   const retryDelayMs = Math.max(1, options.retryDelayMs ?? STATE_LOCK_RETRY_DELAY_MS)
-  const deadline = Date.now() + Math.max(0, options.timeoutMs ?? STATE_LOCK_STALE_MS + retryDelayMs)
+  const deadline = Date.now() + Math.max(0, options.timeoutMs ?? staleMs + retryDelayMs)
   for (;;) {
     try {
       return await open()
@@ -91,6 +102,27 @@ export async function retryStateLock<T>(
       await new Promise<void>(resolve => setTimeout(resolve, retryDelayMs))
     }
   }
+}
+
+/**
+ * Acquire the state directory before constructing a Runtime, retrying only the lock while an interrupted owner becomes stale.
+ * Keeping service registration out of the retry prevents a failed attempt from leaving `orchestrator` registered.
+ * @param stateDir - Directory shared with the previous Host instance.
+ * @param options - Test-scale timing overrides for the lock and retry loop.
+ * @returns Releasable ownership ready to hand to Runtime.
+ */
+export async function acquireStateDirectoryLock(
+  stateDir: string,
+  options: StateLockRetryOptions = {},
+): Promise<StateDirectoryLock> {
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const staleMs = options.staleMs ?? STATE_LOCK_STALE_MS
+  let compromised: (error: Error) => void = () => {}
+  const release = await retryStateLock(
+    () => lockSync(stateDir, { stale: staleMs, onCompromised: error => compromised(error) }),
+    { ...options, staleMs },
+  )
+  return { release, setCompromisedHandler(handler) { compromised = handler } }
 }
 
 /**
@@ -129,14 +161,20 @@ export class Runtime extends Service implements SourceHost {
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
   /** Non-zero while a main-Session tool is executing an Engine command, suppressing self-triggered domain event notices. */
   private quiet = 0
-  constructor(ctx: Context, readonly machine: Machine, restart: () => void) {
+  constructor(ctx: Context, readonly machine: Machine, restart: () => void, acquiredLock?: StateDirectoryLock) {
     super(ctx, 'orchestrator')
     const runtime = this
-    // Lock the state directory before opening the database so another process cannot migrate or write concurrently.
     mkdirSync(machine.stateDir, { recursive: true, mode: 0o700 })
     const compromised = (error: Error) => { this.runtimeHealth.set({ state: 'error', detail: error.message }); this.stopped.abort() }
-    const release = lockSync(machine.stateDir, { stale: STATE_LOCK_STALE_MS, onCompromised: compromised })
-    this.releaseLock = async () => { release() }
+    let releaseSync: (() => void) | undefined
+    if (acquiredLock) {
+      acquiredLock.setCompromisedHandler(compromised)
+      this.releaseLock = async () => { acquiredLock.release() }
+    } else {
+      // Direct construction retains its synchronous guard for callers that already own orchestration of the service lifecycle.
+      releaseSync = lockSync(machine.stateDir, { stale: STATE_LOCK_STALE_MS, onCompromised: compromised })
+      this.releaseLock = async () => { releaseSync?.() }
+    }
     let opened: Store | undefined
     try {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
@@ -237,8 +275,8 @@ export class Runtime extends Service implements SourceHost {
         throw error
       })
     } catch (error) {
-      // Release the database and state lock if initialization fails so an in-process restart can reacquire them.
-      try { opened?.close() } finally { release() }
+      // A caller-supplied lock stays owned by its factory until construction returns successfully.
+      try { opened?.close() } finally { releaseSync?.() }
       throw error
     }
   }

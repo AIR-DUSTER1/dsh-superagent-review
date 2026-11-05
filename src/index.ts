@@ -1,7 +1,7 @@
 /** Main plugin entry: mounts the Runtime and provides its restart callback for deployment account changes. */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
-import { retryStateLock, Runtime } from './app/runtime.ts'
+import { acquireStateDirectoryLock, Runtime } from './app/runtime.ts'
 import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
 
 export const name = 'dsh-superagent'
@@ -20,7 +20,14 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   }
   // A DSH update can terminate the previous host just before this one starts. Keep the plugin recoverable while
   // proper-lockfile's recent lock ages into a provably stale lock instead of turning the update into a missing plugin.
-  const runtime = await retryStateLock(() => new Runtime(ctx, machine, restart))
+  const lock = await acquireStateDirectoryLock(machine.stateDir)
+  let runtime: Runtime
+  try {
+    runtime = new Runtime(ctx, machine, restart, lock)
+  } catch (error) {
+    try { lock.release() } catch (releaseError) { ctx.logger.warn('dsh-superagent could not release its state directory after startup failed: %s', String(releaseError)) }
+    throw error
+  }
   ctx.effect(() => async () => { await runtime.stop() })
   // The Runtime registers its management HTTP routes before probing external accounts. Complete plugin activation
   // without waiting for those network checks, so an update during an outage still leaves the panel available.

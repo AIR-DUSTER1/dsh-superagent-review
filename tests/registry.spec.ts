@@ -98,6 +98,22 @@ describe('Source registry', () => {
     context(githubKind).report('github', { state: 'ready', detail: 'again' })
     expect(board.all.github).toEqual({ state: 'ready', detail: 'again' })
   })
+  it('does not read deployment while constructing a Source context before setup finishes', () => {
+    const sources = new SourceRegistry(() => SettingsSchema.parse({}))
+    sources.register(githubKind)
+    let reads = 0
+    const deps = {
+      sources,
+      get deployment() { reads++; throw new Error('setup has not run') },
+      ready: new Promise<void>(() => {}),
+      configured: () => false,
+    } as unknown as SourceContextDeps
+    const context = sourceContextOf(deps, githubKind)
+    expect(reads).toBe(0)
+    expect(context.configured()).toBe(false)
+    expect(() => context.deployment).toThrow('setup has not run')
+    expect(reads).toBe(1)
+  })
   it('names the Trigger whose message a Trigger\'s message answers, where its kind can', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({}))
     sources.register(feishuKind); sources.register(githubKind)
