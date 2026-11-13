@@ -46,9 +46,13 @@
     "manifestVersion": 1
   },
   "scripts": {
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "commit:check": "node scripts/validate-commit-message.mjs --last",
+    "test:commit": "node --test scripts/validate-commit-message.test.mjs",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "pnpm test:commit && vitest run",
     "check": "pnpm typecheck && pnpm test && pnpm build"
   },
   "engines": {

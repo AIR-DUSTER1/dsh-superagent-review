@@ -67,6 +67,7 @@ plans/           本地计划文档，仅保存在开发机，不纳入 Git
 
 ```powershell
 pnpm install
+pnpm hooks:install
 pnpm typecheck
 pnpm build
 ```
@@ -186,10 +187,10 @@ git diff --check
 
 ### Commit message
 
-整个提交信息必须只有一行，不换行，不写标题正文分隔：
+整个提交信息只有一行，不换行，不分标题和正文：
 
 ```text
-<type>: <中文主题>，<具体变更1>，<具体变更2>
+<type>: <主题概括>，<具体变更1>，<具体变更2>，<具体变更3>
 ```
 
 允许的 `type`：
@@ -197,22 +198,60 @@ git diff --check
 | type | 用途 |
 | --- | --- |
 | `feat` | 新功能 |
-| `fix` | 修复缺陷、小改动、补漏、配置或样式调整 |
-| `refactor` | 涉及 5 个及以上文件且改变整体架构或设计模式的大规模重构 |
-| `style` | 不改变逻辑的样式或格式调整 |
-| `i18n` | 国际化和本地化 |
-| `chore` | 依赖、构建、工具和维护工作 |
-| `docs` | 仅文档变更 |
-| `test` | 仅测试变更 |
+| `fix` | 修复缺陷、小改动、补漏、调整 |
+| `refactor` | 大规模重构 |
+| `style` | 样式调整 |
+| `i18n` | 国际化相关 |
+| `chore` | 构建、依赖或工具 |
+
+`refactor` 仅用于同时满足以下条件的大改动：
+
+- 涉及 5 个及以上文件的结构调整
+- 改变整体架构或设计模式
+- 替换技术方案或重新组织目录结构
+
+凡是不满足上述全部条件的改动，一律使用 `fix`。
 
 硬性要求：
 
-- 类型后使用半角冒号和空格：`fix: `。
-- subject 使用中文，具体描述影响模块和实际变更。
-- 不写句号，不使用序号列表，不重复主题。
-- 不满足 `refactor` 全部条件时，一律使用 `fix`。
-- 禁止 `WIP`、`update`、`changes`、`fix bug` 等空泛描述。
-- 不提交 `.env`、Token、真实姓名、邮箱、SQLite 数据、`.run/`、`lib/` 或凭据。
+- 类型后使用半角冒号和空格：`fix: `，不得写成 `fix：` 或 `fix:`。
+- 主题使用中文，简明描述实际变更。
+- 优先写明受影响的页面、模块或组件。
+- 不使用句号或其它句末标点。
+- 一个提交只做一个主题，不混合互不相关的变更。
+- 严格区分 `fix` 和 `refactor`；补漏、调整、局部修复不得使用 `refactor`。
+
+严格禁止：
+
+- 多行提交信息、空行分隔的标题与正文。
+- `1.`、`2.` 等序号列表。
+- 先写概括再另起一段重复展开。
+- scope、`!` 或单独的 footer。
+- `WIP`、`update`、`changes`、`fix bug` 等空泛描述。
+- 使用 `--no-verify` 绕过提交校验。
+- 提交 `.env`、Token、真实姓名、邮箱、SQLite 数据、生成物或临时调试文件。
+
+正确示例：
+
+```text
+fix: 修复来源插件部署前读取上下文导致插件未安装问题，延迟解析命令和部署信息，为运行时增加状态锁重试
+```
+
+错误示例：
+
+```text
+fix: 修复插件未安装
+
+fix: 增加状态锁重试并延迟读取部署信息
+```
+
+### 自动校验
+
+- `.githooks/commit-msg` 调用 `scripts/validate-commit-message.mjs`，本地 commit 时立即拒绝不合规信息。
+- `.github/workflows/commit-message.yml` 在 Pull Request 中校验相对 base 分支的全部提交。
+- 安装或修复 hooks：`pnpm hooks:install`。
+- 手动校验当前提交：`pnpm commit:check`。
+- 手动校验范围：`node scripts/validate-commit-message.mjs --range origin/main..HEAD`。
 
 ## 9. 审查重点
 
