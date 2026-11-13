@@ -1,9 +1,7 @@
 /** Source status view (health, filtered Triggers, dropped replies) and Source settings cards. */
-import { useNavigation } from './navigation.tsx'
 import { useEffect, useState } from 'react'
 import type { FieldSpec } from '../sources/kind.ts'
-import { type DroppedReply, type SourceStatusRow, type SourceView } from './api.ts'
-import { usePoll } from './poll.ts'
+import { usePoll, type DroppedReply, type SourceStatusRow, type SourceView } from './api.ts'
 import { DisclosureRow, Dot, Icon, InfoTip, Switch, Tag } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { sourceMark } from './marks.ts'
@@ -70,8 +68,7 @@ export function SourceSettings({ focus }: { focus?: string }) {
 }
 
 function DroppedReplies({ items }: { items: DroppedReply[] }) {
-  const { t } = usePanel()
-  const { navigate } = useNavigation()
+  const { t, navigate } = usePanel()
   const [open, setOpen] = useState(false)
   // Link to the message's Ticket, or fall back to its Thread for messages queued before receipts recorded `ticketId`.
   const target = (item: DroppedReply): { route: Route; name: string } | undefined => item.ticket
@@ -96,8 +93,7 @@ function DroppedReplies({ items }: { items: DroppedReply[] }) {
   </DisclosureRow>
 }
 function SourceRow({ source }: { source: SourceStatusRow }) {
-  const { t } = usePanel()
-  const { navigate } = useNavigation()
+  const { t, navigate } = usePanel()
   const { setup } = usePanelData()
   const [filteredOpen, setFilteredOpen] = useState(false)
   const { problem, dropped } = source
@@ -143,8 +139,7 @@ function SourceRow({ source }: { source: SourceStatusRow }) {
 }
 
 export function SourceStatus() {
-  const { t, call } = usePanel()
-  const { navigate } = useNavigation()
+  const { t, call, navigate } = usePanel()
   const { setup } = usePanelData()
   const { data, error } = usePoll(() => call('GET sources'), [])
   // Global deployment setup problems halt all Sources and show at the top; Source-specific setup problems show on that Source's row.

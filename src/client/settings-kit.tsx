@@ -1,15 +1,12 @@
 /** Shared settings context, block draft hook, form controls, Source schema field renderer, and configuration history. */
-import { useNavigation } from './navigation.tsx'
 import { cloneElement, createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactElement,
   type ReactNode } from 'react'
 import type { ApiResponse } from '../app/api.ts'
 import type { FieldSpec, Localized } from '../sources/kind.ts'
-import { type HistoryView, type Settings, type SettingsView, type SourceView } from './api.ts'
-import { usePoll } from './poll.ts'
+import { usePoll, type HistoryView, type Settings, type SettingsView, type SourceView } from './api.ts'
 import { Button, DisclosureRow, Icon, InfoTip, Input, SegmentedControl, Switch } from './controls.tsx'
 import { useDraft } from './draft.tsx'
-import { useAction } from './actions.ts'
-import { usePanel, usePanelData } from './provider.tsx'
+import { useAction, usePanel, usePanelData } from './provider.tsx'
 import { settingsRoute } from './route.ts'
 import { errorText, localized, valueLabel, when, type T } from './text.ts'
 import { Hint, LoadState } from './widgets.tsx'
@@ -245,8 +242,7 @@ export function SourceField({ field, value, saved, fact, onChange, labels, refre
   labels: Record<string, string>
   refreshLabels?: () => Promise<string[]>
 }) {
-  const { t } = usePanel()
-  const { navigate } = useNavigation()
+  const { t, navigate } = usePanel()
   const label = localized(t, field.label), hint = localized(t, field.hint)
   switch (field.type) {
     case 'switch': return <SwitchRow label={label} hint={hint} checked={value === true} onChange={onChange} />

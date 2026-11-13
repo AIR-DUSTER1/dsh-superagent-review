@@ -1,16 +1,14 @@
 /** Trigger status view listing Threads filtered by subscription and evaluation activity. */
-import { useNavigation } from './navigation.tsx'
 import { useState } from 'react'
 import { THREAD_FILTERS, type ThreadFilter } from '../app/api.ts'
-import { usePoll } from './poll.ts'
+import { usePoll } from './api.ts'
 import { Pill } from './controls.tsx'
 import { usePanel } from './provider.tsx'
 import { ThreadLine } from './rows.tsx'
 import { Hint, LoadMore, LoadState, StatusHead } from './widgets.tsx'
 
 export function TriggerStatus({ filter }: { filter: ThreadFilter }) {
-  const { t, call } = usePanel()
-  const { navigate } = useNavigation()
+  const { t, call, navigate } = usePanel()
   const [limit, setLimit] = useState(20)
   const { data, error } = usePoll(() => call('GET threads', { query: { filter, limit } }), [filter, limit])
   const go = (next: ThreadFilter) => { setLimit(20); navigate({ page: 'trigger', query: next !== 'subscribed' ? { filter: next } : {} },

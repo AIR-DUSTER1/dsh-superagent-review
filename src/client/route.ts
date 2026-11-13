@@ -50,18 +50,6 @@ const ROUTE_KEY = 'dsh-superagent/route'
 export interface Location { route: Route; stack: Route[]; group?: SettingsGroup | undefined }
 export const lastSettingsGroup = ({ route, group }: Location): SettingsGroup => route.page === 'settings' ? route.query.group
   : group ?? 'source'
-function moved(current: Location, next: Pick<Location, 'route' | 'stack'>): Location {
-  return { ...next, group: lastSettingsGroup(current) }
-}
-export function navigateTo(current: Location, route: Route, replace = false): Location {
-  return moved(current, { route, stack: replace ? current.stack : [...current.stack, current.route].slice(-20) })
-}
-export function backFrom(current: Location): Location {
-  return moved(current, { route: current.stack.at(-1) ?? HOME, stack: current.stack.slice(0, -1) })
-}
-export function selectTab(current: Location, tab: Tab): Location {
-  return moved(current, { stack: [], route: tab === 'settings' ? settingsRoute(lastSettingsGroup(current)) : { page: tab, id: undefined } })
-}
 export function initialLocation(): Location {
   try {
     const stored = JSON.parse(sessionStorage.getItem(ROUTE_KEY) ?? 'null') as { route?: unknown; stack?: unknown; group?: unknown } | null

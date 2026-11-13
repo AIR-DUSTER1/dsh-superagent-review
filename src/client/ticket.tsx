@@ -1,8 +1,6 @@
 /** Ticket detail page: stage and actions, Mandate details, undelivered/delivered Inputs, subscribed Threads, and Assignments. */
-import { useNavigation } from './navigation.tsx'
 import { useState, type ReactNode } from 'react'
-import { ApiError, type TicketPageView } from './api.ts'
-import { usePoll } from './poll.ts'
+import { ApiError, usePoll, type TicketPageView } from './api.ts'
 import { DisclosureRow, Dot, Icon, Tag, type IconName } from './controls.tsx'
 import { decisionMark, reportDot, ticketMark } from './marks.ts'
 import { usePanel } from './provider.tsx'
@@ -14,8 +12,7 @@ import { ActionLink, ConfirmButton, ExternalLink, Hint, KeyValues, LabelValue, L
 
 type Input = TicketPageView['inputs'][number]
 function InputLine({ input, earlier = [] }: { input: Input; earlier?: { id: string; at: string; preview: string }[] }) {
-  const { t } = usePanel()
-  const { navigate } = useNavigation()
+  const { t, navigate } = usePanel()
   const trigger = input.kind === 'trigger' ? input.trigger : undefined
   return <li className="dt-row">
     <Dot state={input.delivered ? 'idle' : 'warning'} label={input.delivered ? t('inputDelivered') : t('inputUndelivered')} />
@@ -69,8 +66,7 @@ function Assignments({ ticket }: { ticket: TicketPageView }) {
   </li>)}</ul>
 }
 function MandateDetails({ ticket, actor }: { ticket: TicketPageView; actor: string }) {
-  const { t } = usePanel()
-  const { navigate } = useNavigation()
+  const { t, navigate } = usePanel()
   const { mandate, decision } = ticket
   const fact = (item: TicketPageView['basis']['facts'][number]): string => {
     if (item.name === 'legacyAuthority') return valueLabel(t, 'legacy', item.value)

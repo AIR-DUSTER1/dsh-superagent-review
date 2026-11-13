@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { openKnownSession } from '../src/navigation.ts'
-import { backFrom, initialLocation, navigateTo, parseRoute, remember, selectTab, setupPage, type Location } from '../src/client/route.ts'
+import { initialLocation, parseRoute, remember, setupPage } from '../src/client/route.ts'
 const id = 'orchestrator-test' as SessionId
 function fixture(ready = false) {
   const pending = Promise.withResolvers<void>()
@@ -63,25 +63,4 @@ it('reads each page a tab remembered with the parameters it takes, and leaves ou
 it('opens the settings that fix each setup problem: the Deployment group, or the card of the Source it names', () => {
   expect(setupPage('deployment')).toEqual({ page: 'settings', query: { group: 'deployment' } })
   for (const place of ['github', 'feishu'] as const) expect(setupPage(place)).toEqual({ page: 'settings', query: { group: 'source', source: place } })
-})
-it('moves route history without mixing it into panel data state', () => {
-  const initial = { route: { page: 'overview' as const }, stack: [] }
-  const review = navigateTo(initial, { page: 'trigger', id: 'github:1' })
-  expect(review).toEqual({ route: { page: 'trigger', id: 'github:1' }, stack: [{ page: 'overview' }], group: 'source' })
-  expect(navigateTo(review, { page: 'execution' }, true).stack).toEqual([{ page: 'overview' }])
-  expect(backFrom(review)).toEqual({ route: { page: 'overview' }, stack: [], group: 'source' })
-})
-
-it('keeps the last settings group across navigation and caps the history stack', () => {
-  const settings = { route: { page: 'settings' as const, query: { group: 'execution' as const } }, stack: [] }
-  const left = navigateTo(settings, { page: 'overview' })
-  expect(left.group).toBe('execution')
-  expect(selectTab(left, 'settings')).toEqual({
-    route: { page: 'settings', query: { group: 'execution' } },
-    stack: [],
-    group: 'execution',
-  })
-  let location: Location = { route: { page: 'overview' }, stack: [] }
-  for (let index = 0; index < 25; index++) location = navigateTo(location, { page: 'overview' })
-  expect(location.stack).toHaveLength(20)
 })
