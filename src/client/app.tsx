@@ -1,22 +1,15 @@
 /** Root panel shell: header with global search and glossary, top-level navigation tabs, and active route view. */
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { SearchView } from './api.ts'
 import { Button, Dot, Icon, Input, Modal, SegmentedTabs } from './controls.tsx'
 import type { DeploymentForm } from './deployment.tsx'
-import { EvalStatus } from './eval.tsx'
-import { ExecutionStatus } from './execution.tsx'
 import { ticketMark } from './marks.ts'
 import { GLOSSARY, GLOSSARY_VALUES, en, zh, type DshSuperagentKey } from './locales.ts'
-import { OverviewPage } from './overview.tsx'
+import { NavigationProvider, useNavigation } from './navigation.tsx'
 import { PanelProvider, usePanel, usePanelData } from './provider.tsx'
-import { HOME, TABS, initialLocation, lastSettingsGroup, remember, routeLabel, settingsRoute, type Location, type Route,
-  type Tab } from './route.ts'
-import { SettingsPage } from './settings.tsx'
-import { SourceStatus } from './source.tsx'
+import { RouteView } from './route-view.tsx'
+import { TABS, type Route } from './route.ts'
 import { actorName, errorText, reasonLabel, valueLabel, type T, readableMarkers } from './text.ts'
-import { ThreadPage } from './thread.tsx'
-import { TicketPage } from './ticket.tsx'
-import { TriggerStatus } from './trigger.tsx'
 import { When } from './widgets.tsx'
 
 export interface AppProps {
@@ -66,7 +59,8 @@ function Result({ name, open, children }: { name: ReactNode; open: (() => void) 
   </div></li>
 }
 function SearchResults({ result, query, onClose }: { result: SearchView; query: string; onClose: () => void }) {
-  const { t, navigate } = usePanel()
+  const { t } = usePanel()
+  const { navigate } = useNavigation()
   const { setup } = usePanelData()
   const empty = !result.items.length && !result.threads.length && !result.tickets.length
   const counts = { tickets: result.tickets.length, threads: result.threads.length, items: result.items.length }
@@ -138,26 +132,14 @@ function Header({ masterId }: { masterId: string | undefined }) {
   </header>
 }
 
-function Pages({ route, openTab, deploymentForm }: { route: Route; openTab: (tab: Tab) => void; deploymentForm: DeploymentForm }) {
+function Pages({ deploymentForm }: { deploymentForm: DeploymentForm }) {
+  const { location, openTab } = useNavigation()
+  const route = location.route
   const { t } = usePanel()
   const { state, error, reload } = usePanelData()
   // Keep the active tab scrolled into view on narrow screens when routes change via links.
   useEffect(() => { document.getElementById(`dt-tab-${route.page}`)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }) }, [route.page])
-  const waiting = error ? <p className="dt-error" role="alert">{error.message}</p> : <p className="dt-hint">{t('loading')}</p>
-  const page = (() => {
-    switch (route.page) {
-      case 'overview': return <OverviewPage />
-      case 'source': return <SourceStatus />
-      case 'trigger': return route.id !== undefined ? <ThreadPage key={route.id} id={route.id} target={route.query?.trigger} />
-        : <TriggerStatus filter={route.query?.filter ?? 'subscribed'} />
-      case 'eval': return <EvalStatus filter={route.query?.filter ?? 'work'} window={route.query?.window}
-        paused={!!state?.paused} />
-      case 'execution': return route.id !== undefined ? <TicketPage key={route.id} id={route.id} />
-        : state ? <ExecutionStatus filter={route.query?.filter ?? 'open'} state={state} reload={reload} /> : waiting
-      case 'settings': return state ? <SettingsPage key={state.masterId} group={route.query.group} query={route.query} state={state}
-        deploymentForm={deploymentForm} /> : waiting
-    }
-  })()
+  const page = <RouteView route={route} state={state} error={error} reload={reload} deploymentForm={deploymentForm} loadingLabel={t('loading')} />
   return <div className="dt-page">
     <div className="dt-column">
       <Header masterId={state?.masterId} />
@@ -169,20 +151,13 @@ function Pages({ route, openTab, deploymentForm }: { route: Route; openTab: (tab
   </div>
 }
 
-/** Root panel component managing route history and shared panel state. */
-export function App({ t, openSession, deploymentForm }: AppProps) {
-  const [location, setLocation] = useState(initialLocation)
-  useEffect(() => { remember(location) }, [location])
-  // Preserve the last opened settings group across navigation so the Settings tab reopens at it.
-  const move = useCallback((next: (current: Location) => Pick<Location, 'route' | 'stack'>) =>
-    setLocation(current => ({ ...next(current), group: lastSettingsGroup(current) })), [])
-  /** Navigates to `route`; `replace` swaps the current entry (filters, paging) instead of pushing a back step. */
-  const navigate = useCallback((route: Route, replace = false) => move(current => ({ route,
-    stack: replace ? current.stack : [...current.stack, current.route].slice(-20) })), [move])
-  const back = useCallback(() => move(current => ({ route: current.stack.at(-1) ?? HOME, stack: current.stack.slice(0, -1) })), [move])
-  const openTab = useCallback((tab: Tab) => move(current => ({ stack: [], route: tab === 'settings'
-    ? settingsRoute(lastSettingsGroup(current)) : { page: tab, id: undefined } })), [move])
-  return <PanelProvider t={t} openSession={openSession} navigate={navigate} back={back} backLabel={routeLabel(t, location.stack.at(-1) ?? HOME)}>
-    <Pages route={location.route} openTab={openTab} deploymentForm={deploymentForm} />
+function PanelApp({ t, openSession, deploymentForm }: AppProps) {
+  return <PanelProvider t={t} openSession={openSession}>
+    <Pages deploymentForm={deploymentForm} />
   </PanelProvider>
+}
+
+/** Root composition: navigation owns route history, PanelProvider owns data state. */
+export function App(props: AppProps) {
+  return <NavigationProvider t={props.t}><PanelApp {...props} /></NavigationProvider>
 }

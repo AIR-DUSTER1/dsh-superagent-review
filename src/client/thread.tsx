@@ -1,9 +1,12 @@
 /** Thread detail page: Trigger timeline with gap-free pagination, Decisions, subscribed Tickets, and correlated Threads. */
+import { useNavigation } from './navigation.tsx'
 import { useEffect, useState, type ReactNode } from 'react'
-import { ApiError, usePoll, type ThreadPageView, type TriggerRow } from './api.ts'
+import { ApiError, type ThreadPageView, type TriggerRow } from './api.ts'
+import { usePoll } from './poll.ts'
 import { Button, DisclosureRow, Icon, Tag } from './controls.tsx'
 import { decisionMark } from './marks.ts'
-import { useAction, usePanel } from './provider.tsx'
+import { useAction } from './actions.ts'
+import { usePanel } from './provider.tsx'
 import { DecisionLine, Earlier, TicketLine, automatedRuns } from './rows.tsx'
 import { actorName, errorText, readableMarkers, reasonLabel, valueLabel, when, type T } from './text.ts'
 import { ActionLink, ClampText, ConfirmButton, Hint, LoadState, PageHead, Section, When } from './widgets.tsx'
@@ -29,7 +32,8 @@ function TriggerItem({ trigger, earlier, target, subscribed, requeue }: {
   trigger: TriggerRow; earlier: TriggerRow[]; target: string | undefined; subscribed: Set<string>
   requeue: { busy: boolean; run: () => void } | undefined
 }) {
-  const { t, navigate } = usePanel()
+  const { t } = usePanel()
+  const { navigate } = useNavigation()
   const ticketId = trigger.disposition.decision?.ticketId
   const scroll = (element: HTMLLIElement | null) => {
     if (element && target === trigger.id
@@ -106,7 +110,8 @@ function useThreadTimeline(key: string, target: string | undefined) {
   return { data, error, reload, earlier }
 }
 export function ThreadPage({ id, target }: { id: string; target?: string }) {
-  const { t, call, navigate, notify } = usePanel()
+  const { t, call, notify } = usePanel()
+  const { navigate } = useNavigation()
   const [decisionsOpen, setDecisionsOpen] = useState(false)
   const { data, error, reload, earlier } = useThreadTimeline(id, target)
   const requeue = useAction(async (trigger: string) => {

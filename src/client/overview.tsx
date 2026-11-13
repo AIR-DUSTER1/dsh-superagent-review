@@ -1,15 +1,19 @@
 /** Overview page: pending Tickets requiring human action, active system problems, 24-hour flow counts, and Executor load. */
+import { useNavigation } from './navigation.tsx'
 import type { ReactNode } from 'react'
-import { usePoll, type Problem } from './api.ts'
+import { type Problem } from './api.ts'
+import { usePoll } from './poll.ts'
 import { Button, Icon } from './controls.tsx'
-import { useAction, usePanel, usePanelData } from './provider.tsx'
+import { useAction } from './actions.ts'
+import { usePanel, usePanelData } from './provider.tsx'
 import { setupPage, settingsRoute, type Route } from './route.ts'
 import { TicketLine } from './rows.tsx'
 import { healthText, localized, reasonLabel, valueLabel, readableMarkers } from './text.ts'
 import { CheckSetupButton, ConfirmButton, Hint, LoadState, Section, SetupMessage } from './widgets.tsx'
 
 function ProblemLine({ problem, onChanged }: { problem: Problem; onChanged: () => Promise<void> }) {
-  const { t, call, navigate } = usePanel()
+  const { t, call } = usePanel()
+  const { navigate } = useNavigation()
   const post = useAction((request: () => Promise<unknown>) => request(), { reload: onChanged })
   const row = (title: string, detail: ReactNode, route: Route | undefined, hint?: string, actions?: ReactNode) => <li
     className="dt-row dt-link dt-att dt-att-error">
@@ -59,7 +63,8 @@ function ProblemLine({ problem, onChanged }: { problem: Problem; onChanged: () =
 }
 
 export function OverviewPage() {
-  const { t, call, navigate } = usePanel()
+  const { t, call } = usePanel()
+  const { navigate } = useNavigation()
   const { setup } = usePanelData()
   const { data, error, reload } = usePoll(() => call('GET overview'), [])
   if (!data) return <LoadState error={error} loading />

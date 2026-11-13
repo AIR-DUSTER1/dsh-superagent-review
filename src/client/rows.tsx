@@ -1,4 +1,5 @@
 /** Shared list rows for Tickets, Threads, and Decisions, plus Source fact chips and automated-message run folding. */
+import { useNavigation } from './navigation.tsx'
 import { useState } from 'react'
 import type { DecisionRow, ThreadFacts, ThreadRow, TicketRow } from './api.ts'
 import { Icon, Tag } from './controls.tsx'
@@ -10,7 +11,8 @@ import { ActionLink, ConfirmButton, LabelValue, SessionButton, StageMark, When }
 export function TicketLine({ ticket, question, onChanged, context }: {
   ticket: TicketRow; question?: boolean; onChanged?: () => Promise<void>; context?: boolean
 }) {
-  const { t, call, navigate } = usePanel()
+  const { t, call } = usePanel()
+  const { navigate } = useNavigation()
   const status = ticketMark(t, ticket)
   const after = async (request: Promise<unknown>) => { await request; await onChanged?.() }
   const note = question && ticket.note && { ...ticket.note, text: readableMarkers(t, ticket.note.text) }
@@ -49,7 +51,8 @@ function ContextTag() {
 }
 /** Thread list row; on a Ticket page, `ticketId` omits that Ticket from fanout targets and `context` marks context-only threads. */
 export function ThreadLine({ thread, ticketId, context }: { thread: ThreadRow; ticketId?: string; context?: boolean }) {
-  const { t, navigate } = usePanel()
+  const { t } = usePanel()
+  const { navigate } = useNavigation()
   const live = thread.tickets.filter(ticket => ticket.state === 'open' && ticket.id !== ticketId)
   const { dot, icon, label } = threadMark(t, thread)
   const reaches = live.length > 0 && `${live[0]!.title}${live.length > 1 ? t('andMore', { count: live.length - 1 }) : ''}`
@@ -76,7 +79,8 @@ export function ThreadLine({ thread, ticketId, context }: { thread: ThreadRow; t
 }
 
 export function DecisionLine({ decision }: { decision: DecisionRow }) {
-  const { t, navigate } = usePanel()
+  const { t } = usePanel()
+  const { navigate } = useNavigation()
   const matched = decision.rules.filter(rule => rule.matched).map(rule => rule.name)
   const mark = decisionMark(t, decision.outcome)
   const preview = readableMarkers(t, decision.preview)

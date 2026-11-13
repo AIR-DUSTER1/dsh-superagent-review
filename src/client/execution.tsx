@@ -1,8 +1,10 @@
 /** Execution status view (active Tickets and pause control) and Execution settings group (Executor capacity and workspace environment). */
+import { useNavigation } from './navigation.tsx'
 import { useRef, useState } from 'react'
 import { TICKET_FILTERS, type TicketFilter } from '../app/api.ts'
 import { LIMITS } from '../limits.ts'
-import { usePoll, type SettingsView, type SourceView, type StateView } from './api.ts'
+import { type SettingsView, type SourceView, type StateView } from './api.ts'
+import { usePoll } from './poll.ts'
 import { DisclosureRow, Icon, InfoTip, Input, Pill } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { usePanel } from './provider.tsx'
@@ -14,7 +16,8 @@ import { ConfirmButton, Hint, LabelValue, LoadMore, LoadState, Section, StatusHe
 export function ExecutionStatus({ filter: current, state, reload }: {
   filter: TicketFilter; state: StateView; reload: () => Promise<void>
 }) {
-  const { t, call, navigate } = usePanel()
+  const { t, call } = usePanel()
+  const { navigate } = useNavigation()
   const [limit, setLimit] = useState(20)
   const { data, error, reload: reloadTickets } = usePoll(() => call('GET tickets', { query: { state: current, limit } }), [current, limit])
   const { paused, load: { maxWorkers } } = state

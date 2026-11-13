@@ -1,4 +1,5 @@
 /** Settings tab shell routing between stage settings (Sources, Eval, Execution), Prompts, and Deployment. */
+import { useNavigation } from './navigation.tsx'
 import type { StateView } from './api.ts'
 import { DeploymentPage, type DeploymentForm } from './deployment.tsx'
 import { EvalSettings } from './eval.tsx'
@@ -13,7 +14,8 @@ const STAGE_GROUPS: readonly SettingsGroup[] = ['source', 'eval', 'execution']
 export function SettingsPage({ group, query, state, deploymentForm }: {
   group: SettingsGroup; query: { source?: string; version?: string }; state: StateView; deploymentForm: DeploymentForm
 }) {
-  const { t, navigate } = usePanel()
+  const { t } = usePanel()
+  const { navigate } = useNavigation()
   const content = (() => {
     switch (group) {
       case 'source': return <SettingsProvider><SourceSettings {...query.source ? { focus: query.source } : {}} /></SettingsProvider>

@@ -1,14 +1,11 @@
-/** Loopback-only management HTTP routes with same-origin enforcement for the web panel. */
+/** Loopback-only management HTTP transport, request matching, signing checks, and error serialization. */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
-import { THREAD_FILTERS, TICKET_FILTERS, type Api, type ApiResponse, type RouteParams } from './api.ts'
-import { sourceSkills } from './context.ts'
+import type { Api } from './api.ts'
 import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
-import { PromptConflict, SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, builtInParts, defaultPrompts, savePrompts, type Prompts }
-  from './prompts.ts'
-import { policyVersion } from '../policy.ts'
+import { PromptConflict, type Prompts } from './prompts.ts'
 import { SettingsConflict, type Settings } from './settings.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
 import { UserError, type EngineForPeople, type Ticket } from '../core/index.ts'
@@ -21,14 +18,10 @@ import type { SourceRegistry } from '../sources/registry.ts'
 import type { Sessions } from './sessions.ts'
 import type { Store } from './store.ts'
 import type { TextCache } from './cache.ts'
-import type { LinkTarget, ViewHost } from './views/records.ts'
+import type { LinkTarget } from './views/records.ts'
 import type { Variable } from './execution-environment.ts'
-import { policyHistory } from './settings-history.ts'
-import { overview } from './views/overview.ts'
-import { settingsView } from './views/settings.ts'
-import { sourcesStatus, type SetupState } from './views/sources.ts'
-import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
-import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
+import { routes, type Input, type Routes } from './http-routes.ts'
+import { RouteError } from './route-error.ts'
 
 export interface HttpHost {
   readonly store: Store
@@ -58,11 +51,6 @@ export interface HttpHost {
   requestPass(): void
   models(): Promise<ModelCatalog>
 }
-/**
- * Represents a client-facing 400 or 404 error raised during management route parsing or lookup.
- * Route handlers throw it when request bodies are malformed or target records are missing, and registerHttp serializes its status and message in the HTTP response.
- */
-class RouteError extends Error { constructor(readonly status: 400 | 403 | 404, message: string) { super(message) } }
 async function readBody(req: IncomingMessage, maxBytes = 128 * 1024): Promise<unknown> {
   let size = 0; const chunks: Buffer[] = []
   for await (const chunk of req) {
@@ -95,143 +83,6 @@ function failure(error: unknown): [number, Record<string, unknown>] {
   return [500, { error: error instanceof Error ? error.message : String(error) }]
 }
 
-function machineView({ stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }: Machine) {
-  return { stateDir, promptMaxChars: promptMaxChars.get(), admissionContextMaxPages: admissionContextMaxPages.get(),
-    admissionContextTimeoutMs: admissionContextTimeoutMs.get() }
-}
-function setupView(runtime: HttpHost) {
-  const resolved = runtime.configured() ? runtime.deployment : undefined
-  return {
-    machine: machineView(runtime.machine), problem: runtime.setupProblem ?? null, feishuProblem: runtime.feishuProblem ?? null,
-    accounts: resolved ? { repository: resolved.repository, agent: resolved.github.login, feishu: resolved.feishu ? { appId: resolved.feishu.appId, brand: resolved.feishu.brand, botId: resolved.feishu.botId, name: resolved.feishu.name } : null } : null,
-  }
-}
-/** Build the `/orchestrator/api/state` response consumed by the management panel and `scripts/dsh-superagent status` (`docs/006-deployment.md`). */
-export function stateView(runtime: HttpHost) {
-  const settings = runtime.store.settings()
-  return { setup: setupView(runtime), load: { ...executorLoad(runtime.store, runtime.executor.activeCount()),
-    maxWorkers: settings.executor.maxWorkers },
-    masterId: runtime.masterId, paused: settings.paused, health: runtime.health }
-}
-const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources: runtime.sources, links: runtime.links() })
-const setupState = (runtime: HttpHost): SetupState => ({ deployment: runtime.configured() ? runtime.deployment : undefined,
-  problem: runtime.setupProblem, feishuProblem: runtime.feishuProblem })
-export type StateView = ReturnType<typeof stateView>
-/** Builds a ticket's detail view; `environment` is empty while waiting for setup because it requires the resolved deployment. */
-function ticketPage(runtime: HttpHost, id: string) {
-  const detail = ticketDetail(views(runtime), id), ticket = runtime.store.tickets.get(id)
-  if (!detail || !ticket) throw new RouteError(404, 'Ticket not found')
-  return { ...detail, environment: runtime.configured() ? runtime.ticketEnvironment(ticket) : [] }
-}
-export type TicketPageView = ReturnType<typeof ticketPage>
-function promptsView(runtime: HttpHost, revision: number | undefined, offset: number) {
-  const current = runtime.prompts.current()
-  const shown = revision === undefined || revision === current.revision ? current : runtime.prompts.version(revision)
-  // Each built-in part with the key of its text, which an override records as its base, and for the overrides shown whose
-  // built-in text changed since, the text they were edited from when known.
-  const parts = Object.entries(builtInParts()).map(([key, part]) => ({ key, ...part, base: builtInBase(part.text) }))
-  return { masterId: runtime.masterId, current: shown, defaults: defaultPrompts(), sections: TEAM_SECTIONS, skillName: SKILL_NAME.source,
-    builtin: Object.keys(sourceSkills), skillPrefix: SKILL_PREFIX, parts, defaultChanged: runtime.prompts.defaultChanged(shown.config),
-    ...runtime.sessions.status(), ...runtime.prompts.history(offset) }
-}
-export type PromptsView = ReturnType<typeof promptsView>
-
-interface Input<K extends keyof Api> {
-  params: RouteParams<K>; query: Record<string, string>; body: (maxBytes?: number) => Promise<unknown>
-}
-type Routes = { [K in keyof Api]: (input: Input<K>) => ApiResponse<K> | Promise<ApiResponse<K>> }
-const offset = z.coerce.number().int().nonnegative().catch(0)
-const limit = (fallback: number, max: number) => z.coerce.number().int().positive().catch(fallback).transform(value => Math.min(max, value))
-const TicketsQuery = z.object({ state: z.enum(TICKET_FILTERS).catch('open'), offset, limit: limit(20, 1000) })
-const ThreadsQuery = z.object({ filter: z.enum(THREAD_FILTERS).catch('subscribed'), offset, limit: limit(20, 1000) })
-const ThreadQuery = z.object({ limit: limit(50, 100), before: z.string().optional(), around: z.string().optional() })
-const DecisionsQuery = z.object({ kind: z.string().default(''), window: z.literal('24h').optional().catch(undefined), offset,
-  limit: limit(30, 200) })
-const count = z.coerce.number().int().nonnegative()
-const PromptsQuery = z.object({ revision: count.optional(), offset: count.default(0) })
-const SourceBlock = z.templateLiteral(['source:', z.string().regex(/^[a-z][a-z0-9-]*$/)])
-const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), SourceBlock])
-const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().nonnegative() })
-
-function routes(runtime: HttpHost): Routes {
-  const { store } = runtime
-  const ticket = (id: string) => { if (!store.tickets.get(id)) throw new RouteError(404, 'Ticket not found'); return id }
-  const promptBody = (input: { body: (maxBytes?: number) => Promise<unknown> }) => input.body(4 * runtime.machine.promptMaxChars.get() + 4096)
-  const approval = () => {
-    if (!runtime.approval) throw new ApprovalError('APPROVAL_UNAVAILABLE', 503, 'Approval bridge is not initialized')
-    return runtime.approval
-  }
-  return {
-    'GET state': () => stateView(runtime),
-    'GET proposals': () => ({ items: approval().list() }),
-    'GET proposals/:id': ({ params }) => approval().get(params.id),
-    'POST proposals/:id/decision': async ({ params, body }) => approval().decide(params.id, await body(1_048_576)),
-    'POST proposals/:id/reschedule': async ({ params, body }) => approval().reschedule(params.id, await body(1_048_576)),
-    'POST proposals/:id/withdraw': async ({ params, body }) => approval().withdraw(params.id, await body(1_048_576)),
-    'POST executions': async ({ body }) => approval().execute(await body(1_048_576)),
-    'POST workspaces/sync': async ({ body }) => runtime.workspaceService.sync(await body(1_048_576)),
-    'POST workspaces/validate': async ({ body }) => runtime.workspaceService.discover(await body()),
-    'POST workspaces/describe': async ({ body }) => runtime.workspaceService.describe(await body()),
-    'GET workspaces/health': () => runtime.workspaceService.health(),
-    'POST workspaces/reassign-proposal': async ({ body }) => approval().reassign(await body()),
-    'GET overview': () => overview(views(runtime), runtime.health, policyVersion(store.settings()),
-      executorLoad(store, runtime.executor.activeCount()), runtime.setupProblem ?? runtime.feishuProblem),
-    'GET search': ({ query }) => search(views(runtime), query.q ?? '', runtime.sourceLinks),
-    'GET sources': () => sourcesStatus(views(runtime), runtime.health, setupState(runtime)),
-    'GET settings': () => settingsView(store, runtime.sources, runtime.health, setupState(runtime), runtime.machine.stateDir),
-    'POST sources/:id/labels': ({ params }) => runtime.settings.refreshLabels(params.id),
-    'GET threads': ({ query }) => {
-      const { filter, offset, limit } = ThreadsQuery.parse(query)
-      return threadList(views(runtime), filter, offset, limit)
-    },
-    'GET threads/:key': ({ params, query }) => {
-      const { limit, before, around } = ThreadQuery.parse(query)
-      const detail = threadDetail(views(runtime), params.key, before, limit, around)
-      if (!detail) throw new RouteError(404, 'Thread not found')
-      return detail
-    },
-    'POST threads/:key/unsubscribe': async ({ params }) => {
-      const removed = runtime.engine.unsubscribe(params.key)
-      return { removed, thread: params.key, context_delivery: await runtime.sessions.delivery(`subscription:${params.key}`) }
-    },
-    'POST triggers/:id/requeue': ({ params }) => {
-      const queued = runtime.engine.reevaluate(params.id)
-      runtime.requestPass()
-      return { queued }
-    },
-    'GET decisions': ({ query }) => {
-      const { kind, window, offset, limit } = DecisionsQuery.parse(query)
-      const since = window ? new Date(Date.now() - 86_400_000).toISOString() : ''
-      return decisionList(views(runtime), kind.split(',').filter(Boolean), offset, limit, since)
-    },
-    'POST decisions/:id/dismiss': ({ params }) => { runtime.engine.dismiss(params.id); return { dismissed: true } },
-    'GET tickets': ({ query }) => {
-      const { state, offset, limit } = TicketsQuery.parse(query)
-      return ticketList(views(runtime), state, offset, limit)
-    },
-    'GET tickets/:id': ({ params }) => ticketPage(runtime, params.id),
-    'POST tickets/:id/retry': ({ params }) => { const id = ticket(params.id); runtime.engine.retryTicket(id); return { retried: true } },
-    'POST tickets/:id/stop': ({ params }) => { const id = ticket(params.id); runtime.engine.stopTicket(id); return { stopped: true } },
-    'POST executor/pause': async ({ body }) => runtime.settings.pause(z.object({ paused: z.boolean() }).parse(await body()).paused, 'panel'),
-    'PUT settings/:block': async ({ params, body }) => {
-      const block = SettingsBlockSchema.parse(params.block)
-      const known = !block.startsWith('source:') || runtime.sources.instances().some(instance => `source:${instance.id}` === block)
-      if (!known) throw new RouteError(404, 'Source not found')
-      const request = SaveRequest.parse(await body())
-      return runtime.settings.save(block, request.value, request.revision, 'panel')
-    },
-    'GET policy/history': () => policyHistory(store, runtime.sources, policyVersion(store.settings())),
-    'POST policy-sync/:id': async ({ params }) => ({ policy: await runtime.settings.sync(params.id) }),
-    'POST setup/check': () => { runtime.checkSetup(); return { restarting: true } },
-    'GET models': () => runtime.models(),
-    'GET prompts': ({ query }) => { const { revision, offset } = PromptsQuery.parse(query); return promptsView(runtime, revision, offset) },
-    'PUT prompts': async input => {
-      const request = z.object({ config: z.unknown(), baseRevision: z.number().int().nonnegative() }).parse(await promptBody(input))
-      return savePrompts(runtime, request.config, request.baseRevision, 'panel')
-    },
-    'POST prompts/preview': async input => runtime.prompts.preview(await promptBody(input)),
-  }
-}
 function decoded(segment: string): string {
   try { return decodeURIComponent(segment) } catch { throw new RouteError(400, 'A path segment has a malformed escape') }
 }

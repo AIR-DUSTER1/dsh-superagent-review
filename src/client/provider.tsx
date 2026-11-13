@@ -1,17 +1,14 @@
-/** Shared panel React contexts, state polling, restart detection, and action runner hook. */
+/** Shared panel data contexts, polling, restart detection, and toast state. Navigation is provided separately. */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { caller, usePoll, type ApiMessages, type Call, type SetupView, type StateView } from './api.ts'
-import type { Route } from './route.ts'
+import { caller, type ApiMessages, type Call, type SetupView, type StateView } from './api.ts'
+import { usePoll } from './poll.ts'
 import STYLES from './client.css?raw'
 import { errorText, setupText, valueLabel, type T } from './text.ts'
 
 export interface PanelContext {
   t: T
   call: Call
-  navigate: (route: Route, replace?: boolean) => void
-  back: () => void
-  backLabel: string
   openSession: (sessionId: string) => Promise<void>
   notify: (text: string) => void
   restart: () => void
@@ -38,22 +35,6 @@ export function usePanelData(): PanelData {
   if (!value) throw new Error('dsh-superagent page rendered outside its panel')
   return value
 }
-/** Wrap an async action with re-entrancy protection, busy state, optional reload, and error toast reporting. */
-export function useAction<A extends unknown[]>(action: (...args: A) => Promise<unknown>,
-  { reload }: { reload?: () => Promise<unknown> } = {}) {
-  const { notify } = usePanel()
-  const [busy, setBusy] = useState(false)
-  const running = useRef(false)
-  const run = async (...args: A): Promise<boolean> => {
-    if (running.current) return false
-    running.current = true
-    setBusy(true)
-    try { await action(...args); await reload?.(); return true }
-    catch (failure) { notify(errorText(failure)); return false }
-    finally { running.current = false; setBusy(false) }
-  }
-  return { run, busy }
-}
 
 const messages = (t: T): ApiMessages => ({
   offline: t('offline'), notRunning: t('hostNotRunning'), serverError: status => t('serverError', { status }),
@@ -69,12 +50,9 @@ function Toast({ text, onDone, holdMs = 3000 }: { text: string; onDone: () => vo
   return createPortal(<div className="dt-toast" role="status" style={{ ['--dt-toast-hold' as string]: `${holdMs}ms` }}>{text}</div>,
     document.body)
 }
-const stay = () => {}
 const noSession = async () => {}
-export function PanelProvider({ t, interval = 5000, openSession = noSession, navigate = stay, back = stay, backLabel = '', children }: {
-  t: T; interval?: number; openSession?: (sessionId: string) => Promise<void>; navigate?: PanelContext['navigate']; back?: () => void
-  backLabel?: string
-  children: ReactNode
+export function PanelProvider({ t, interval = 5000, openSession = noSession, children }: {
+  t: T; interval?: number; openSession?: (sessionId: string) => Promise<void>; children: ReactNode
 }) {
   // Read the current translator via ref so locale changes do not recreate `call` and restart polling.
   const copy = useRef(t)
@@ -96,8 +74,7 @@ export function PanelProvider({ t, interval = 5000, openSession = noSession, nav
     const timer = setTimeout(() => setRestarting(undefined), 30_000)
     return () => clearTimeout(timer)
   }, [restarting])
-  const context = useMemo(() => ({ t, call, navigate, back, backLabel, openSession, notify, restart }), [t, call, navigate, back, backLabel,
-    openSession, notify, restart])
+  const context = useMemo(() => ({ t, call, openSession, notify, restart }), [t, call, openSession, notify, restart])
   const data = useMemo(() => ({ state, error, reload, setup: state?.setup, running: state?.load.running ?? 0, restarts }), [state, error,
     reload, restarts])
   return <Panel.Provider value={context}><PanelState.Provider value={data}>
